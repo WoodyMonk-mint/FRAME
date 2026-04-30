@@ -5984,3 +5984,123 @@ kbd {
 .task-view .view-header {
   padding: 1.25rem 2rem 1rem;
 }
+
+/* ── Iteration 2: Tags ──────────────────────────────────────────── */
+
+.tag-input {
+  position: relative;
+}
+.tag-input-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.4rem 0.55rem;
+  min-height: 2.5rem;
+  transition: border-color 0.15s;
+}
+.tag-input-chips:focus-within {
+  border-color: var(--indigo);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.18);
+}
+.tag-input-chips input {
+  flex: 1;
+  min-width: 6rem;
+  border: 0 !important;
+  background: transparent !important;
+  padding: 0.15rem 0 !important;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.875rem;
+  outline: none;
+}
+.tag-input-chips input::placeholder {
+  color: var(--muted);
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: rgba(99, 102, 241, 0.16);
+  border: 1px solid rgba(99, 102, 241, 0.30);
+  color: #c7d2fe;
+  font-size: 0.78rem;
+  padding: 2px 4px 2px 8px;
+  border-radius: 999px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.tag-chip-x {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0 4px;
+  opacity: 0.7;
+  border-radius: 50%;
+}
+.tag-chip-x:hover { opacity: 1; background: rgba(99, 102, 241, 0.25); }
+
+.tag-input-suggestions {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  right: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.3rem;
+  box-shadow: var(--shadow);
+  z-index: 50;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.tag-input-suggestion {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 3px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.tag-input-suggestion:hover {
+  border-color: rgba(99, 102, 241, 0.5);
+  background: rgba(99, 102, 241, 0.10);
+}
+
+/* Tag chips in the table row (read-only, smaller) */
+.tag-cell-pile {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: center;
+}
+.tag-chip-static {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(99, 102, 241, 0.13);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  color: #c7d2fe;
+  font-size: 0.7rem;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-weight: 500;
+  max-width: 6rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag-chip-static.tag-chip-extra {
+  background: transparent;
+  color: var(--muted);
+  border-color: var(--border);
+}

@@ -26,10 +26,11 @@ declare global {
     listBackups:     () => Promise<Array<{ filename: string; path: string; size: number; isoDate: string }>>
     restoreSpecific: (filePath: string) => Promise<{ ok: boolean; error?: string }>
 
-    // Domain — Iteration 1
+    // Domain — Iteration 1+
     listTasks:       () => Promise<import('./types').Task[]>
     listCategories:  () => Promise<import('./types').Category[]>
     listAssignees:   () => Promise<import('./types').Assignee[]>
+    listTags:        () => Promise<string[]>
     createTask:      (input: import('./types').TaskInput) => Promise<{ ok: boolean; task?: import('./types').Task; error?: string }>
     updateTask:      (id: number, patch: import('./types').TaskPatch) => Promise<{ ok: boolean; task?: import('./types').Task; error?: string }>
     softDeleteTask:  (id: number) => Promise<{ ok: boolean; error?: string }>

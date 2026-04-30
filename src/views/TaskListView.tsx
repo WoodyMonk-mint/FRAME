@@ -26,6 +26,7 @@ export function TaskListView() {
   const [tasks, setTasks]           = useState<Task[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [assignees, setAssignees]   = useState<Assignee[]>([])
+  const [tagSuggestions, setTagSuggestions] = useState<string[]>([])
   const [loading, setLoading]       = useState(true)
   const [error, setError]           = useState<string | null>(null)
   const [visibleStatuses, setVisibleStatuses] = useState<Set<Status>>(DEFAULT_VISIBLE)
@@ -35,14 +36,16 @@ export function TaskListView() {
   const reload = async () => {
     setError(null)
     try {
-      const [t, c, a] = await Promise.all([
+      const [t, c, a, tg] = await Promise.all([
         window.frame.db.listTasks(),
         window.frame.db.listCategories(),
         window.frame.db.listAssignees(),
+        window.frame.db.listTags(),
       ])
       setTasks(t)
       setCategories(c)
       setAssignees(a)
+      setTagSuggestions(tg)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -54,15 +57,17 @@ export function TaskListView() {
     let cancelled = false
     void (async () => {
       try {
-        const [t, c, a] = await Promise.all([
+        const [t, c, a, tg] = await Promise.all([
           window.frame.db.listTasks(),
           window.frame.db.listCategories(),
           window.frame.db.listAssignees(),
+          window.frame.db.listTags(),
         ])
         if (!cancelled) {
           setTasks(t)
           setCategories(c)
           setAssignees(a)
+          setTagSuggestions(tg)
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err))
@@ -189,7 +194,8 @@ export function TaskListView() {
                 <th style={{ width: '4rem' }}>Pri</th>
                 <th style={{ width: '8rem' }}>Due</th>
                 <th style={{ width: '8rem' }}>Owner</th>
-                <th style={{ width: '10rem' }}>Team</th>
+                <th style={{ width: '9rem' }}>Team</th>
+                <th style={{ width: '11rem' }}>Tags</th>
                 <th style={{ width: '5rem', textAlign: 'right' }}>%</th>
               </tr>
             </thead>
@@ -215,6 +221,7 @@ export function TaskListView() {
           task={modal.kind === 'edit' ? modal.task : undefined}
           categories={categories}
           assignees={assignees}
+          tagSuggestions={tagSuggestions}
           onCancel={() => setModal({ kind: 'closed' })}
           onSave={saveTask}
           onDelete={modal.kind === 'edit' ? () => setConfirmDelete(modal.task) : undefined}
@@ -275,8 +282,24 @@ function TaskRow({
           ? <span className="muted">—</span>
           : <AssigneePile names={task.assignees} />}
       </td>
+      <td>
+        {task.tags.length === 0
+          ? <span className="muted">—</span>
+          : <TagCellPile tags={task.tags} />}
+      </td>
       <td style={{ textAlign: 'right' }}>{task.percentComplete}</td>
     </tr>
+  )
+}
+
+function TagCellPile({ tags }: { tags: string[] }) {
+  const visible = tags.slice(0, 2)
+  const extra   = tags.length - visible.length
+  return (
+    <span className="tag-cell-pile" title={tags.join(', ')}>
+      {visible.map(t => <span key={t} className="tag-chip-static">{t}</span>)}
+      {extra > 0 && <span className="tag-chip-static tag-chip-extra">+{extra}</span>}
+    </span>
   )
 }
 

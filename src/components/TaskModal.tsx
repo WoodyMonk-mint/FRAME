@@ -2,15 +2,17 @@ import { useEffect, useState } from 'react'
 import type { Assignee, Category, Priority, Status, Task, TaskInput } from '../types'
 import { ALL_PRIORITIES, ALL_STATUSES } from '../types'
 import { todayIso } from '../lib/date'
+import { TagInput } from './TagInput'
 
 type Props = {
-  mode:        'add' | 'edit'
-  task?:       Task
-  categories:  Category[]
-  assignees:   Assignee[]
-  onCancel:    () => void
-  onSave:      (input: TaskInput, options: { setCompletedToToday: boolean }) => Promise<void>
-  onDelete?:   () => void
+  mode:           'add' | 'edit'
+  task?:          Task
+  categories:     Category[]
+  assignees:      Assignee[]
+  tagSuggestions: string[]
+  onCancel:       () => void
+  onSave:         (input: TaskInput, options: { setCompletedToToday: boolean }) => Promise<void>
+  onDelete?:      () => void
 }
 
 const STATUS_LABEL: Record<Status, string> = {
@@ -22,18 +24,17 @@ const STATUS_LABEL: Record<Status, string> = {
   CANCELLED: 'Cancelled',
 }
 
-export function TaskModal({ mode, task, categories, assignees, onCancel, onSave, onDelete }: Props) {
+export function TaskModal({ mode, task, categories, assignees, tagSuggestions, onCancel, onSave, onDelete }: Props) {
   const [title, setTitle]                   = useState(task?.title ?? '')
   const [categoryId, setCategoryId]         = useState<number | null>(task?.categoryId ?? (categories[0]?.id ?? null))
   const [primaryOwner, setPrimaryOwner]     = useState<string | null>(task?.primaryOwner ?? null)
-  // The primary owner is implicitly part of the team; if an existing task's owner
-  // wasn't in the assignee join, treat them as on-team in the modal.
   const [team, setTeam] = useState<string[]>(() => {
     const existing = task?.assignees ?? []
     const owner    = task?.primaryOwner
     if (owner && !existing.includes(owner)) return [...existing, owner]
     return existing
   })
+  const [tags, setTags]                     = useState<string[]>(task?.tags ?? [])
   const [status, setStatus]                 = useState<Status>(task?.status ?? 'PLANNING')
   const [priority, setPriority]             = useState<Priority | null>(task?.priority ?? null)
   const [dueDate, setDueDate]               = useState(task?.dueDate ?? '')
@@ -76,6 +77,7 @@ export function TaskModal({ mode, task, categories, assignees, onCancel, onSave,
         categoryId,
         primaryOwner:    primaryOwner ?? null,
         assignees:       team,
+        tags,
         status,
         priority,
         dueDate:         dueDate || null,
@@ -170,6 +172,11 @@ export function TaskModal({ mode, task, categories, assignees, onCancel, onSave,
                 </button>
               ))}
             </div>
+          </div>
+
+          <div className="form-field">
+            <span>Tags</span>
+            <TagInput value={tags} onChange={setTags} suggestions={tagSuggestions} />
           </div>
 
           <div className="form-field">

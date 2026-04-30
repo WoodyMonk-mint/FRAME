@@ -43,6 +43,7 @@ export type Task = {
   priority:           Priority | null
   primaryOwner:       string | null
   assignees:          string[]
+  tags:               string[]
   dueDate:            string | null
   completedDate:      string | null
   percentComplete:    number
@@ -51,12 +52,12 @@ export type Task = {
   updatedAt:          string
 }
 
-// Used when creating a task — only iteration-1 fields are exposed.
 export type TaskInput = {
   title:           string
   categoryId:      number | null
   primaryOwner:    string | null
   assignees:       string[]
+  tags:            string[]
   status:          Status
   priority:        Priority | null
   dueDate:         string | null

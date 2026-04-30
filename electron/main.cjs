@@ -49,7 +49,7 @@ function setupPaths(chosenDbPath) {
 
 // ─── Task helpers ─────────────────────────────────────────────────────────────
 
-function taskRowToObject(r, assignees) {
+function taskRowToObject(r, assignees, tags) {
   return {
     id:               r.id,
     type:             r.type,
@@ -61,6 +61,7 @@ function taskRowToObject(r, assignees) {
     priority:         r.priority,
     primaryOwner:     r.primary_owner,
     assignees:        assignees ?? [],
+    tags:             tags ?? [],
     dueDate:          r.due_date,
     completedDate:    r.completed_date,
     percentComplete:  r.percent_complete ?? 0,
@@ -80,7 +81,8 @@ function getTaskById(id) {
   `).get(id)
   if (!r) return null
   const assignees = db.prepare('SELECT name FROM task_assignees WHERE task_id = ?').all(id).map(x => x.name)
-  return taskRowToObject(r, assignees)
+  const tags      = db.prepare('SELECT tag FROM task_tags WHERE task_id = ?').all(id).map(x => x.tag)
+  return taskRowToObject(r, assignees, tags)
 }
 
 // ─── Backup ───────────────────────────────────────────────────────────────────
@@ -640,14 +642,38 @@ function registerIpcHandlers() {
     const assigneeRows = db.prepare(
       `SELECT task_id, name FROM task_assignees WHERE task_id IN (${placeholders})`
     ).all(...ids)
+    const tagRows = db.prepare(
+      `SELECT task_id, tag FROM task_tags WHERE task_id IN (${placeholders})`
+    ).all(...ids)
 
     const assigneesByTaskId = {}
     for (const a of assigneeRows) {
       if (!assigneesByTaskId[a.task_id]) assigneesByTaskId[a.task_id] = []
       assigneesByTaskId[a.task_id].push(a.name)
     }
+    const tagsByTaskId = {}
+    for (const t of tagRows) {
+      if (!tagsByTaskId[t.task_id]) tagsByTaskId[t.task_id] = []
+      tagsByTaskId[t.task_id].push(t.tag)
+    }
 
-    return rows.map(r => taskRowToObject(r, assigneesByTaskId[r.id] ?? []))
+    return rows.map(r => taskRowToObject(
+      r,
+      assigneesByTaskId[r.id] ?? [],
+      tagsByTaskId[r.id] ?? [],
+    ))
+  })
+
+  ipcMain.handle('db:list-tags', () => {
+    if (!db) return []
+    return db.prepare(`
+      SELECT tag, COUNT(*) AS n
+      FROM task_tags tt
+      JOIN tasks t ON tt.task_id = t.id
+      WHERE t.is_deleted = 0
+      GROUP BY tag
+      ORDER BY n DESC, tag
+    `).all().map(r => r.tag)
   })
 
   ipcMain.handle('db:create-task', (_event, input) => {
@@ -682,11 +708,23 @@ function registerIpcHandlers() {
           for (const name of input.assignees) insA.run(newId, name)
         }
 
+        const cleanTags = Array.isArray(input.tags)
+          ? [...new Set(input.tags.map(t => String(t).trim()).filter(Boolean))]
+          : []
+        if (cleanTags.length) {
+          const insT = db.prepare('INSERT INTO task_tags (task_id, tag) VALUES (?, ?)')
+          for (const tag of cleanTags) insT.run(newId, tag)
+        }
+
         const newRow = db.prepare('SELECT * FROM tasks WHERE id = ?').get(newId)
         db.prepare(`
           INSERT INTO audit_log (table_name, row_id, action, changed_by, new_values)
           VALUES ('tasks', ?, 'INSERT', 'user', ?)
-        `).run(newId, JSON.stringify({ ...newRow, assignees: input.assignees ?? [] }))
+        `).run(newId, JSON.stringify({
+          ...newRow,
+          assignees: input.assignees ?? [],
+          tags:      cleanTags,
+        }))
       })
       tx()
       return { ok: true, task: getTaskById(newId) }
@@ -733,6 +771,16 @@ function registerIpcHandlers() {
           for (const name of patch.assignees) insA.run(id, name)
         }
 
+        const oldTags = db.prepare('SELECT tag FROM task_tags WHERE task_id = ?').all(id).map(r => r.tag)
+        let newTags = oldTags
+        if (Array.isArray(patch.tags)) {
+          const cleanTags = [...new Set(patch.tags.map(t => String(t).trim()).filter(Boolean))]
+          db.prepare('DELETE FROM task_tags WHERE task_id = ?').run(id)
+          const insT = db.prepare('INSERT INTO task_tags (task_id, tag) VALUES (?, ?)')
+          for (const tag of cleanTags) insT.run(id, tag)
+          newTags = cleanTags
+        }
+
         const newRow = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id)
         const newAssignees = Array.isArray(patch.assignees) ? patch.assignees : oldAssignees
         db.prepare(`
@@ -740,8 +788,8 @@ function registerIpcHandlers() {
           VALUES ('tasks', ?, 'UPDATE', 'user', ?, ?)
         `).run(
           id,
-          JSON.stringify({ ...oldRow, assignees: oldAssignees }),
-          JSON.stringify({ ...newRow, assignees: newAssignees }),
+          JSON.stringify({ ...oldRow, assignees: oldAssignees, tags: oldTags }),
+          JSON.stringify({ ...newRow, assignees: newAssignees, tags: newTags }),
         )
       })
       tx()
@@ -759,13 +807,14 @@ function registerIpcHandlers() {
         const oldRow = db.prepare('SELECT * FROM tasks WHERE id = ? AND is_deleted = 0').get(id)
         if (!oldRow) throw new Error(`Task ${id} not found`)
         const oldAssignees = db.prepare('SELECT name FROM task_assignees WHERE task_id = ?').all(id).map(r => r.name)
+        const oldTags      = db.prepare('SELECT tag FROM task_tags WHERE task_id = ?').all(id).map(r => r.tag)
 
         db.prepare(`UPDATE tasks SET is_deleted = 1, updated_at = datetime('now') WHERE id = ?`).run(id)
 
         db.prepare(`
           INSERT INTO audit_log (table_name, row_id, action, changed_by, old_values)
           VALUES ('tasks', ?, 'DELETE', 'user', ?)
-        `).run(id, JSON.stringify({ ...oldRow, assignees: oldAssignees }))
+        `).run(id, JSON.stringify({ ...oldRow, assignees: oldAssignees, tags: oldTags }))
       })
       tx()
       return { ok: true }

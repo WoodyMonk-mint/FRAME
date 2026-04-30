@@ -19,10 +19,11 @@ try {
       listBackups:     ()         => ipcRenderer.invoke('db:list-backups'),
       restoreSpecific: (filePath) => ipcRenderer.invoke('db:restore-specific', filePath),
 
-      // Domain — Iteration 1
+      // Domain — Iteration 1+
       listTasks:       ()              => ipcRenderer.invoke('db:list-tasks'),
       listCategories:  ()              => ipcRenderer.invoke('db:list-categories'),
       listAssignees:   ()              => ipcRenderer.invoke('db:list-assignees'),
+      listTags:        ()              => ipcRenderer.invoke('db:list-tags'),
       createTask:      (input)         => ipcRenderer.invoke('db:create-task', input),
       updateTask:      (id, patch)     => ipcRenderer.invoke('db:update-task', id, patch),
       softDeleteTask:  (id)            => ipcRenderer.invoke('db:soft-delete-task', id),
