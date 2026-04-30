@@ -7,6 +7,7 @@ import { PriorityPill, StatusPill } from '../components/Pills'
 import { FilterDropdown } from '../components/FilterDropdown'
 import { SavedViewsDropdown } from '../components/SavedViewsDropdown'
 import { SingleSelectDropdown } from '../components/SingleSelectDropdown'
+import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import type { DueRange } from '../lib/date'
 import { formatDate, isOverdue, todayIso } from '../lib/date'
 import { effectivePercent } from '../lib/percent'
@@ -73,6 +74,9 @@ export function TaskListView() {
 
   const [modal, setModal]                 = useState<ModalState>({ kind: 'closed' })
   const [confirmDelete, setConfirmDelete] = useState<Task | null>(null)
+
+  // Right-click context menu on task rows.
+  const [ctxMenu, setCtxMenu] = useState<{ task: Task; x: number; y: number } | null>(null)
 
   const reload = async () => {
     setError(null)
@@ -590,6 +594,7 @@ export function TaskListView() {
                           onMarkDone={(target) => markDone(target)}
                           onUndone={(target) => undone(target)}
                           onAddSubtask={() => setModal({ kind: 'add-subtask', parent: t })}
+                          onContextMenu={(target, x, y) => setCtxMenu({ task: target, x, y })}
                         />
                       )
                     })}
@@ -633,6 +638,28 @@ export function TaskListView() {
           onConfirm={() => doDelete(confirmDelete)}
         />
       )}
+
+      {ctxMenu && (() => {
+        const t       = ctxMenu.task
+        const isDone  = t.status === 'DONE'
+        const canSub  = t.parentTaskId === null
+        const items: ContextMenuItem[] = [
+          { kind: 'item', label: 'Open',        onSelect: () => setModal({ kind: 'edit', task: t }) },
+          { kind: 'item', label: 'Add subtask', onSelect: () => setModal({ kind: 'add-subtask', parent: t }), disabled: !canSub },
+          { kind: 'item', label: isDone ? 'Mark not done' : 'Mark done',
+            onSelect: () => isDone ? undone(t) : markDone(t) },
+          { kind: 'divider' },
+          { kind: 'item', label: 'Delete…', danger: true, onSelect: () => setConfirmDelete(t) },
+        ]
+        return (
+          <ContextMenu
+            x={ctxMenu.x}
+            y={ctxMenu.y}
+            items={items}
+            onClose={() => setCtxMenu(null)}
+          />
+        )
+      })()}
     </div>
   )
 }
@@ -666,7 +693,7 @@ function SortTh({
 
 function RowGroup({
   task, children, isExpanded, categoryColour,
-  onToggle, onOpen, onMarkDone, onUndone, onAddSubtask,
+  onToggle, onOpen, onMarkDone, onUndone, onAddSubtask, onContextMenu,
 }: {
   task:           Task
   children:       Task[]
@@ -677,6 +704,7 @@ function RowGroup({
   onMarkDone:     (t: Task) => void
   onUndone:       (t: Task) => void
   onAddSubtask:   () => void
+  onContextMenu:  (t: Task, x: number, y: number) => void
 }) {
   const hasChildren = children.length > 0
   const displayPercent = effectivePercent(task, children)
@@ -694,6 +722,7 @@ function RowGroup({
         onOpen={() => onOpen(task)}
         onMarkDone={() => onMarkDone(task)}
         onUndone={() => onUndone(task)}
+        onContextMenu={(x, y) => onContextMenu(task, x, y)}
         displayPercent={displayPercent}
         percentMode={hasChildren ? (task.percentManual ? 'manual' : 'auto') : 'leaf'}
       />
@@ -709,6 +738,7 @@ function RowGroup({
           onOpen={() => onOpen(c)}
           onMarkDone={() => onMarkDone(c)}
           onUndone={() => onUndone(c)}
+          onContextMenu={(x, y) => onContextMenu(c, x, y)}
           displayPercent={c.percentComplete}
           percentMode="leaf"
         />
@@ -734,7 +764,7 @@ function RowGroup({
 
 function TaskRow({
   task, depth, canExpand, isExpanded, onToggle,
-  categoryColour, onOpen, onMarkDone, onUndone,
+  categoryColour, onOpen, onMarkDone, onUndone, onContextMenu,
   displayPercent, percentMode,
 }: {
   task:           Task
@@ -746,6 +776,7 @@ function TaskRow({
   onOpen:         () => void
   onMarkDone:     () => void
   onUndone:       () => void
+  onContextMenu:  (x: number, y: number) => void
   displayPercent: number
   percentMode:    'auto' | 'manual' | 'leaf'
 }) {
@@ -757,6 +788,7 @@ function TaskRow({
     <tr
       className={`task-row ${isDone ? 'task-row-done' : ''} ${isSubtask ? 'task-row-subtask' : ''}`}
       onClick={onOpen}
+      onContextMenu={e => { e.preventDefault(); onContextMenu(e.clientX, e.clientY) }}
     >
       <td onClick={e => e.stopPropagation()}>
         <input

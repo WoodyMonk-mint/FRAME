@@ -2418,8 +2418,32 @@ textarea {
   white-space: nowrap;
 }
 
-.context-menu-item:hover {
+.context-menu-item:hover,
+.context-menu-item-active {
   background: rgba(99, 102, 241, 0.14);
+}
+
+.context-menu-item-disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.context-menu-item-disabled:hover,
+.context-menu-item-disabled.context-menu-item-active {
+  background: transparent;
+}
+
+.context-menu-item-danger {
+  color: #f87171;
+}
+.context-menu-item-danger:hover,
+.context-menu-item-danger.context-menu-item-active {
+  background: rgba(248, 113, 113, 0.14);
+}
+
+.context-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 2px;
 }
 
 .gate-tooltip {
