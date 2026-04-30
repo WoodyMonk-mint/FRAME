@@ -7,6 +7,7 @@ import { PriorityPill, StatusPill } from '../components/Pills'
 import type { DueRange } from '../lib/date'
 import { formatDate, isInDueRange, isOverdue, todayIso } from '../lib/date'
 import { effectivePercent } from '../lib/percent'
+import { tasksToCsv } from '../lib/csv'
 
 type ModalState =
   | { kind: 'closed' }
@@ -295,6 +296,26 @@ export function TaskListView() {
     await reload()
   }
 
+  const exportCsv = async () => {
+    setError(null)
+    const flat: Task[] = []
+    for (const g of groups) {
+      for (const t of g.tasks) {
+        flat.push(t)
+        for (const c of (childrenByParent.get(t.id) ?? [])) flat.push(c)
+      }
+    }
+    if (flat.length === 0) {
+      setError('Nothing to export — current view has no tasks.')
+      return
+    }
+    const csv = tasksToCsv(flat)
+    const r = await window.frame.app.saveCsv(csv, `frame-tasks-${todayIso()}.csv`)
+    if (!r.ok && !r.cancelled) {
+      setError(r.error ?? 'Export failed')
+    }
+  }
+
   if (loading) {
     return <div className="view-empty"><p className="muted">Loading…</p></div>
   }
@@ -306,9 +327,14 @@ export function TaskListView() {
           <h1>Task List</h1>
           <p className="muted compact">{visibleTopLevel.length} of {totalTopLevel} task{totalTopLevel === 1 ? '' : 's'}</p>
         </div>
-        <button className="primary-button" onClick={() => setModal({ kind: 'add' })}>
-          + Add task
-        </button>
+        <div className="header-actions">
+          <button className="chip" onClick={exportCsv}>
+            Export CSV
+          </button>
+          <button className="primary-button" onClick={() => setModal({ kind: 'add' })}>
+            + Add task
+          </button>
+        </div>
       </header>
 
       {error && <div className="setup-error" style={{ margin: '1rem 2rem 0' }}>{error}</div>}

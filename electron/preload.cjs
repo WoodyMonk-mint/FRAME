@@ -7,6 +7,9 @@ try {
   contextBridge.exposeInMainWorld('frame', {
     version,
     openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
+    app: {
+      saveCsv: (content, suggestedName) => ipcRenderer.invoke('app:save-csv', content, suggestedName),
+    },
     db: {
       getStatus:       ()         => ipcRenderer.invoke('db:get-status'),
       setup:           (opts)     => ipcRenderer.invoke('db:setup', opts),

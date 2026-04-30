@@ -938,6 +938,25 @@ function registerIpcHandlers() {
     }
   })
 
+  ipcMain.handle('app:save-csv', async (event, content, suggestedName) => {
+    try {
+      const win = BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow()
+      const dialogOpts = {
+        title:       'Export CSV',
+        defaultPath: suggestedName ?? `frame-export-${new Date().toISOString().slice(0, 10)}.csv`,
+        filters:     [{ name: 'CSV', extensions: ['csv'] }],
+      }
+      const { filePath, canceled } = win
+        ? await dialog.showSaveDialog(win, dialogOpts)
+        : await dialog.showSaveDialog(dialogOpts)
+      if (canceled || !filePath) return { ok: false, cancelled: true }
+      fs.writeFileSync(filePath, content, 'utf-8')
+      return { ok: true, path: filePath }
+    } catch (err) {
+      return { ok: false, error: err.message }
+    }
+  })
+
   ipcMain.handle('shell:open-external', (_event, url) => {
     const allowed = ['https://github.com/WoodyMonk-mint/FRAME/']
     if (allowed.some((prefix) => url.startsWith(prefix))) {

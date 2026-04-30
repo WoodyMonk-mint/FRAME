@@ -36,9 +36,15 @@ declare global {
     softDeleteTask:  (id: number) => Promise<{ ok: boolean; error?: string }>
   }
 
+  interface FrameAppApi {
+    saveCsv: (content: string, suggestedName?: string) =>
+      Promise<{ ok: boolean; cancelled?: boolean; error?: string; path?: string }>
+  }
+
   interface FrameApi {
     version:      string
     openExternal: (url: string) => Promise<void>
+    app:          FrameAppApi
     db:           FrameDb
   }
 
