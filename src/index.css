@@ -3815,12 +3815,15 @@ kbd {
   background: rgba(255,255,255,0.05);
 }
 
-.dash-filter-option input[type="checkbox"] {
-  width: auto;
+.dash-filter-option input[type="checkbox"],
+.dash-filter-option input[type="radio"] {
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
   accent-color: #6366f1;
   margin: 0;
   padding: 0;
+  vertical-align: middle;
 }
 
 .dash-filter-date-label {
