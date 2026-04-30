@@ -17,6 +17,7 @@ type Props = {
   onCancel:       () => void
   onSave:         (input: TaskInput, options: { setCompletedToToday: boolean }) => Promise<void>
   onDelete?:      () => void
+  onAddSubtask?:  () => void    // shown on edit modal for top-level tasks only
 }
 
 const STATUS_LABEL: Record<Status, string> = {
@@ -31,7 +32,7 @@ const STATUS_LABEL: Record<Status, string> = {
 export function TaskModal({
   mode, task, parent, childCount = 0, autoChildren = [],
   categories, assignees, tagSuggestions,
-  onCancel, onSave, onDelete,
+  onCancel, onSave, onDelete, onAddSubtask,
 }: Props) {
   const [title, setTitle]                   = useState(task?.title ?? '')
   const [categoryId, setCategoryId]         = useState<number | null>(
@@ -259,6 +260,14 @@ export function TaskModal({
               <button type="button" className="chip chip--danger" onClick={onDelete} disabled={saving} style={{ marginRight: 'auto' }}>
                 Delete
               </button>
+            )}
+            {mode === 'edit' && onAddSubtask && (
+              <button
+                type="button"
+                className="chip"
+                onClick={onAddSubtask}
+                disabled={saving}
+              >+ Add subtask</button>
             )}
             <button type="button" className="chip" onClick={onCancel} disabled={saving}>
               Cancel

@@ -614,6 +614,11 @@ export function TaskListView() {
           onCancel={() => setModal({ kind: 'closed' })}
           onSave={saveTask}
           onDelete={modal.kind === 'edit' ? () => setConfirmDelete(modal.task) : undefined}
+          onAddSubtask={
+            modal.kind === 'edit' && modal.task.parentTaskId === null
+              ? () => setModal({ kind: 'add-subtask', parent: modal.task })
+              : undefined
+          }
         />
       )}
 
