@@ -6,25 +6,12 @@ const isDev = !!process.env.VITE_DEV_SERVER_URL
 
 // ─── Database state ───────────────────────────────────────────────────────────
 
-let db          = null
-let dbPath      = null
-let backupPath  = null
-let backupsDir  = null
-let dbStatus    = 'checking'   // 'checking' | 'first-run' | 'ready' | 'missing' | 'corrupt'
+let db            = null
+let dbPath        = null
+let backupPath    = null
+let backupsDir    = null
+let dbStatus      = 'checking'   // 'checking' | 'first-run' | 'ready' | 'missing' | 'corrupt'
 let dbStatusError = null
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function monthIndexToIso(index) {
-  const year  = 2022 + Math.floor((index - 1) / 12)
-  const month = ((index - 1) % 12) + 1
-  return `${year}-${String(month).padStart(2, '0')}`
-}
-
-function isoToMonthIndex(iso) {
-  const [year, month] = iso.split('-').map(Number)
-  return (year - 2022) * 12 + month
-}
 
 // ─── Config (stores chosen DB path across launches) ──────────────────────────
 
@@ -69,11 +56,11 @@ function createSessionBackup() {
     fs.copyFileSync(dbPath, backupPath)
 
     const stamp  = new Date().toISOString().slice(0, 19).replace(/:/g, '-')
-    const tsPath = path.join(backupsDir, `prism-${stamp}.db`)
+    const tsPath = path.join(backupsDir, `frame-${stamp}.db`)
     fs.copyFileSync(dbPath, tsPath)
 
     const existing = fs.readdirSync(backupsDir)
-      .filter(f => f.startsWith('prism-') && f.endsWith('.db'))
+      .filter(f => f.startsWith('frame-') && f.endsWith('.db'))
       .sort()
     if (existing.length > 10) {
       existing.slice(0, existing.length - 10)
@@ -89,166 +76,275 @@ function createSessionBackup() {
 
 function runSchema() {
   db.exec(`
-    CREATE TABLE IF NOT EXISTS projects (
-      id           TEXT PRIMARY KEY,
-      name         TEXT NOT NULL,
-      studio       TEXT NOT NULL DEFAULT '',
-      status       TEXT NOT NULL DEFAULT 'Concept',
-      partner_team TEXT,
-      genre        TEXT,
-      release      TEXT,
-      platforms    TEXT DEFAULT '[]',
-      start_date   TEXT,
-      end_date     TEXT,
+    CREATE TABLE IF NOT EXISTS categories (
+      id          INTEGER PRIMARY KEY,
+      name        TEXT NOT NULL UNIQUE,
+      sort_order  INTEGER,
+      colour      TEXT,
+      is_archived INTEGER DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS assignees (
+      id          INTEGER PRIMARY KEY,
+      name        TEXT NOT NULL UNIQUE,
+      is_active   INTEGER DEFAULT 1,
+      sort_order  INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS workflow_templates (
+      id          INTEGER PRIMARY KEY,
+      name        TEXT NOT NULL UNIQUE,
+      gate_type   TEXT,
+      description TEXT,
+      category_id INTEGER REFERENCES categories(id),
+      is_archived INTEGER DEFAULT 0,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS workflow_template_steps (
+      id            INTEGER PRIMARY KEY,
+      template_id   INTEGER NOT NULL REFERENCES workflow_templates(id) ON DELETE CASCADE,
+      step_number   INTEGER NOT NULL,
+      title         TEXT NOT NULL,
+      description   TEXT,
+      default_owner TEXT,
+      offset_days   INTEGER,
+      is_optional   INTEGER DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS workflow_instances (
+      id          INTEGER PRIMARY KEY,
+      template_id INTEGER REFERENCES workflow_templates(id),
+      name        TEXT NOT NULL,
+      gate_type   TEXT,
+      project_ref TEXT,
+      start_date  TEXT,
+      target_date TEXT,
+      status      TEXT DEFAULT 'WIP',
+      notes       TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS tasks (
+      id                   INTEGER PRIMARY KEY,
+      type                 TEXT NOT NULL,
+      category_id          INTEGER REFERENCES categories(id),
+      workflow_instance_id INTEGER REFERENCES workflow_instances(id),
+      parent_task_id       INTEGER REFERENCES tasks(id),
+      title                TEXT NOT NULL,
+      description          TEXT,
+      status               TEXT NOT NULL DEFAULT 'PLANNING',
+      priority             TEXT,
+      primary_owner        TEXT REFERENCES assignees(name),
+      due_date             TEXT,
+      completed_date       TEXT,
+      percent_complete     INTEGER DEFAULT 0,
+      recurrence_type      TEXT,
+      recurrence_interval  INTEGER,
+      recurrence_unit      TEXT,
+      recurrence_anchor    TEXT,
+      next_due_date        TEXT,
+      auto_create_next     INTEGER DEFAULT 1,
+      blocked_reason       TEXT,
+      blocked_by_task_id   INTEGER REFERENCES tasks(id),
+      notes                TEXT,
+      created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at           TEXT NOT NULL DEFAULT (datetime('now')),
+      is_deleted           INTEGER DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS workflow_instance_steps (
+      id               INTEGER PRIMARY KEY,
+      instance_id      INTEGER NOT NULL REFERENCES workflow_instances(id) ON DELETE CASCADE,
+      template_step_id INTEGER REFERENCES workflow_template_steps(id),
+      task_id          INTEGER REFERENCES tasks(id),
+      step_number      INTEGER NOT NULL,
+      is_deviation     INTEGER DEFAULT 0,
+      deviation_reason TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS workflow_notes (
+      id          INTEGER PRIMARY KEY,
+      instance_id INTEGER NOT NULL REFERENCES workflow_instances(id) ON DELETE CASCADE,
+      note        TEXT NOT NULL,
+      author      TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS task_assignees (
+      id      INTEGER PRIMARY KEY,
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      name    TEXT NOT NULL REFERENCES assignees(name)
+    );
+
+    CREATE TABLE IF NOT EXISTS task_tags (
+      id      INTEGER PRIMARY KEY,
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      tag     TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS monthly_commitments (
+      id           INTEGER PRIMARY KEY,
+      task_id      INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      month        TEXT NOT NULL,
+      committed    INTEGER DEFAULT 0,
+      committed_at TEXT,
       notes        TEXT,
-      created_at   TEXT DEFAULT (datetime('now')),
-      updated_at   TEXT DEFAULT (datetime('now'))
+      UNIQUE (task_id, month)
     );
 
-    CREATE TABLE IF NOT EXISTS picklists (
-      id         TEXT NOT NULL,
-      list_type  TEXT NOT NULL,
-      label      TEXT NOT NULL,
-      sort_order INTEGER DEFAULT 0,
-      color      TEXT,
-      PRIMARY KEY (id, list_type)
+    CREATE TABLE IF NOT EXISTS task_snapshots (
+      id               INTEGER PRIMARY KEY,
+      snapshot_date    TEXT NOT NULL,
+      task_id          INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      status           TEXT,
+      percent_complete INTEGER,
+      due_date         TEXT,
+      primary_owner    TEXT
     );
 
-    CREATE TABLE IF NOT EXISTS taxonomy_entries (
-      id          TEXT PRIMARY KEY,
-      parent_id   TEXT REFERENCES taxonomy_entries(id),
-      label       TEXT NOT NULL,
-      level       INTEGER NOT NULL,
-      color       TEXT,
-      sort_order  INTEGER DEFAULT 0
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id          INTEGER PRIMARY KEY,
+      table_name  TEXT NOT NULL,
+      row_id      INTEGER NOT NULL,
+      action      TEXT NOT NULL,
+      changed_by  TEXT,
+      changed_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      old_values  TEXT,
+      new_values  TEXT
     );
 
-    CREATE TABLE IF NOT EXISTS maps (
-      id           TEXT PRIMARY KEY,
-      project_id   TEXT NOT NULL REFERENCES projects(id),
-      stamp_year   INTEGER NOT NULL,
-      stamp_month  INTEGER NOT NULL,
-      start_date   TEXT NOT NULL,
-      end_date     TEXT NOT NULL,
-      comment      TEXT,
-      created_at   TEXT DEFAULT (datetime('now')),
-      UNIQUE(project_id, stamp_year, stamp_month)
-    );
+    CREATE INDEX IF NOT EXISTS idx_tasks_status      ON tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_tasks_due_date    ON tasks(due_date);
+    CREATE INDEX IF NOT EXISTS idx_tasks_category    ON tasks(category_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_workflow    ON tasks(workflow_instance_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_parent      ON tasks(parent_task_id);
+    CREATE INDEX IF NOT EXISTS idx_task_assignees    ON task_assignees(task_id);
+    CREATE INDEX IF NOT EXISTS idx_task_tags         ON task_tags(task_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_table_row   ON audit_log(table_name, row_id);
 
-    CREATE TABLE IF NOT EXISTS map_rows (
-      id              TEXT PRIMARY KEY,
-      map_id          TEXT NOT NULL REFERENCES maps(id) ON DELETE CASCADE,
-      section_id      TEXT NOT NULL,
-      taxonomy_level  INTEGER NOT NULL,
-      taxonomy_key    TEXT,
-      parent_row_id   TEXT REFERENCES map_rows(id),
-      label           TEXT NOT NULL,
-      sort_order      INTEGER NOT NULL DEFAULT 0
-    );
+    CREATE VIEW IF NOT EXISTS v_overdue_tasks AS
+      SELECT t.*, c.name AS category_name
+      FROM tasks t
+      LEFT JOIN categories c ON t.category_id = c.id
+      WHERE t.status NOT IN ('DONE','CANCELLED')
+        AND t.is_deleted = 0
+        AND t.due_date IS NOT NULL
+        AND t.due_date < date('now');
 
-    CREATE TABLE IF NOT EXISTS row_values (
-      row_id     TEXT NOT NULL REFERENCES map_rows(id) ON DELETE CASCADE,
-      month_date TEXT NOT NULL,
-      value      INTEGER NOT NULL,
-      PRIMARY KEY (row_id, month_date)
-    );
+    CREATE VIEW IF NOT EXISTS v_due_soon AS
+      SELECT t.*, c.name AS category_name
+      FROM tasks t
+      LEFT JOIN categories c ON t.category_id = c.id
+      WHERE t.status NOT IN ('DONE','CANCELLED')
+        AND t.is_deleted = 0
+        AND t.due_date IS NOT NULL
+        AND t.due_date BETWEEN date('now') AND date('now','+1 day');
 
-    CREATE TABLE IF NOT EXISTS map_milestones (
-      id             TEXT PRIMARY KEY,
-      map_id         TEXT NOT NULL REFERENCES maps(id) ON DELETE CASCADE,
-      label          TEXT NOT NULL,
-      type           TEXT NOT NULL,
-      month_date     TEXT NOT NULL,
-      note           TEXT,
-      phase_boundary TEXT
-    );
+    CREATE VIEW IF NOT EXISTS v_workload AS
+      SELECT a.name AS assignee, COUNT(*) AS open_tasks
+      FROM task_assignees a
+      JOIN tasks t ON a.task_id = t.id
+      WHERE t.status NOT IN ('DONE','CANCELLED') AND t.is_deleted = 0
+      GROUP BY a.name;
   `)
 }
 
-// ─── Migrations ───────────────────────────────────────────────────────────────
+// ─── Seed (idempotent) ───────────────────────────────────────────────────────
 
-function runMigrations() {
-  // projects table: recreate if schema drifted
-  const projectCols  = db.pragma('table_info(projects)').map(c => c.name)
-  const expectedCols = ['id','name','studio','status','partner_team','genre','release','platforms','start_date','end_date','notes','created_at','updated_at']
-  const hasUnknownCols = projectCols.some(c => !expectedCols.includes(c))
-  const missingCols    = expectedCols.filter(c => !projectCols.includes(c))
+function seedDatabase() {
+  const seed = db.transaction(() => {
+    // Categories
+    const catCount = db.prepare('SELECT COUNT(*) AS n FROM categories').get().n
+    if (catCount === 0) {
+      const ins = db.prepare('INSERT INTO categories (name, sort_order, colour) VALUES (?, ?, ?)')
+      const rows = [
+        ['Production Analysis',   1, '#14b8a6'],
+        ['Production Processes',  2, '#6366f1'],
+        ['Report & Intelligence', 3, '#f59e0b'],
+        ['Gate Reviews',          4, '#f43f5e'],
+        ['Mandates',              5, '#10b981'],
+        ['Admin',                 6, '#64748b'],
+      ]
+      rows.forEach(r => ins.run(...r))
+      console.log('[DB] Seeded 6 categories')
+    }
 
-  if (hasUnknownCols || missingCols.length > 0) {
-    db.exec(`
-      DROP TABLE IF EXISTS projects_new;
-      CREATE TABLE IF NOT EXISTS projects_new (
-        id           TEXT PRIMARY KEY,
-        name         TEXT NOT NULL,
-        studio       TEXT NOT NULL DEFAULT '',
-        status       TEXT NOT NULL DEFAULT 'Concept',
-        partner_team TEXT,
-        genre        TEXT,
-        release      TEXT,
-        platforms    TEXT DEFAULT '[]',
-        start_date   TEXT,
-        end_date     TEXT,
-        notes        TEXT,
-        created_at   TEXT DEFAULT (datetime('now')),
-        updated_at   TEXT DEFAULT (datetime('now'))
-      );
-      INSERT INTO projects_new (id, name, studio, status, partner_team, genre, release, platforms, start_date, end_date, notes, created_at, updated_at)
-        SELECT
-          id,
-          COALESCE(name, ''),
-          COALESCE(${projectCols.includes('studio') ? 'studio' : projectCols.includes('studio_id') ? 'studio_id' : "''"},''),
-          COALESCE(${projectCols.includes('status') ? 'status' : "'Concept'"},'Concept'),
-          ${projectCols.includes('partner_team') ? 'partner_team' : 'NULL'},
-          ${projectCols.includes('genre') ? 'genre' : 'NULL'},
-          ${projectCols.includes('release') ? 'release' : 'NULL'},
-          COALESCE(${projectCols.includes('platforms') ? 'platforms' : "'[]'"},'[]'),
-          ${projectCols.includes('start_date') ? 'start_date' : 'NULL'},
-          ${projectCols.includes('end_date') ? 'end_date' : 'NULL'},
-          ${projectCols.includes('notes') ? 'notes' : 'NULL'},
-          COALESCE(${projectCols.includes('created_at') ? 'created_at' : "datetime('now')"},datetime('now')),
-          COALESCE(${projectCols.includes('updated_at') ? 'updated_at' : "datetime('now')"},datetime('now'))
-        FROM projects;
-      DROP TABLE projects;
-      ALTER TABLE projects_new RENAME TO projects;
-    `)
-    console.log('[DB] Migrated projects table to current schema')
-  }
+    // Assignees
+    const aCount = db.prepare('SELECT COUNT(*) AS n FROM assignees').get().n
+    if (aCount === 0) {
+      const ins = db.prepare('INSERT INTO assignees (name, sort_order) VALUES (?, ?)')
+      const team = ['David', 'Wim', 'Athena', 'Cloud', 'Cathy', 'Alex']
+      team.forEach((n, i) => ins.run(n, i + 1))
+      console.log('[DB] Seeded 6 assignees')
+    }
 
-  // picklists: add missing columns
-  const picklistCols = db.pragma('table_info(picklists)').map(c => c.name)
-  if (!picklistCols.includes('color')) {
-    db.exec('ALTER TABLE picklists ADD COLUMN color TEXT')
-    console.log('[DB] Added color column to picklists')
-  }
-  if (!picklistCols.includes('value')) {
-    db.exec('ALTER TABLE picklists ADD COLUMN value TEXT')
-    console.log('[DB] Added value column to picklists')
-  }
+    // Workflow templates
+    const tCount = db.prepare('SELECT COUNT(*) AS n FROM workflow_templates').get().n
+    if (tCount === 0) {
+      const insTpl  = db.prepare(`
+        INSERT INTO workflow_templates (name, gate_type, description, category_id)
+        VALUES (?, ?, ?, ?)
+      `)
+      const insStep = db.prepare(`
+        INSERT INTO workflow_template_steps (template_id, step_number, title, default_owner, is_optional)
+        VALUES (?, ?, ?, ?, ?)
+      `)
+      const catId = (name) => db.prepare('SELECT id FROM categories WHERE name = ?').get(name)?.id ?? null
 
-  // maps: add rate columns
-  const mapCols = db.pragma('table_info(maps)').map(c => c.name)
-  if (!mapCols.includes('internal_rate')) {
-    db.exec('ALTER TABLE maps ADD COLUMN internal_rate REAL')
-    console.log('[DB] Added internal_rate column to maps')
-  }
-  if (!mapCols.includes('external_rate')) {
-    db.exec('ALTER TABLE maps ADD COLUMN external_rate REAL')
-    console.log('[DB] Added external_rate column to maps')
-  }
+      // Gate Review (gate_type set per instance)
+      const gateRes = insTpl.run(
+        'Gate Review',
+        null,
+        'Standard gate review process — gate type (Concept / VS / EFP / FP) set per instance',
+        catId('Gate Reviews')
+      )
+      const gateSteps = [
+        [1,  'GR Kickoff',                                              'Alex',  0],
+        [2,  'Receive request, confirm assessment goals',               'David', 0],
+        [3,  'Review deliverables, check missing with Pteam',           'David', 0],
+        [4,  'Build Kick-Off Meeting & GR Deliverables',                'Alex',  0],
+        [5,  'Pteam Presentation',                                      'Alex',  0],
+        [6,  'Support Pteam: Mandate draft for central team review',    'David', 0],
+        [7,  'Discuss within PPM',                                      'David', 0],
+        [8,  'Discuss with central teams (GRC, BOS, Finance)',          'David', 1],
+        [9,  'Q&A with Pteam',                                          'Alex',  0],
+        [10, 'Prep PM feedback, sync with central teams',               'David', 0],
+        [11, 'Consolidate PM feedback and share with Yongyi',           'Wim',   0],
+        [12, 'Deliver assessment to GR team',                           'David', 0],
+        [13, 'Feedback meeting with assessment teams',                  'David', 0],
+        [14, 'GR Decision meeting',                                     'Alex',  0],
+        [15, 'Support Pteam: finalised Mandate for GR approval',        'David', 0],
+      ]
+      gateSteps.forEach(([n, t, o, opt]) => insStep.run(gateRes.lastInsertRowid, n, t, o, opt))
 
-  // map_rows: add rate override columns
-  const rowCols = db.pragma('table_info(map_rows)').map(c => c.name)
-  if (!rowCols.includes('man_month_rate')) {
-    db.exec('ALTER TABLE map_rows ADD COLUMN man_month_rate REAL')
-    console.log('[DB] Added man_month_rate column to map_rows')
-  }
-  if (!rowCols.includes('budget_values')) {
-    db.exec('ALTER TABLE map_rows ADD COLUMN budget_values TEXT')
-    console.log('[DB] Added budget_values column to map_rows')
-  }
+      // Production Analysis
+      const paRes = insTpl.run(
+        'Production Analysis',
+        null,
+        'Standard production analysis workflow',
+        catId('Production Analysis')
+      )
+      const paSteps = [
+        [1, 'Receive request / initiate',         'David', 0],
+        [2, 'Assign PoC',                         'David', 0],
+        [3, 'Review available materials',         'David', 0],
+        [4, 'Playtest / build review',            'David', 1],
+        [5, 'Internal PPM discussion',            'David', 0],
+        [6, 'Draft assessment',                   'David', 0],
+        [7, 'Feedback meeting with studio',       'David', 0],
+        [8, 'Finalise and deliver assessment',    'David', 0],
+      ]
+      paSteps.forEach(([n, t, o, opt]) => insStep.run(paRes.lastInsertRowid, n, t, o, opt))
+
+      console.log('[DB] Seeded 2 workflow templates (Gate Review, Production Analysis)')
+    }
+  })
+  seed()
 }
 
-// ─── Core: open, integrity-check, schema, migrate ────────────────────────────
+// ─── Core: open, integrity-check, schema, seed ───────────────────────────────
 
 function openAndValidateDb() {
   const Database = require('better-sqlite3')
@@ -257,7 +353,6 @@ function openAndValidateDb() {
 
   db = new Database(dbPath)
 
-  // Integrity check before trusting the file
   const check = db.pragma('integrity_check')
   if (!Array.isArray(check) || check[0]?.integrity_check !== 'ok') {
     const detail = JSON.stringify(check)
@@ -269,7 +364,7 @@ function openAndValidateDb() {
   db.pragma('foreign_keys = ON')
 
   runSchema()
-  runMigrations()
+  seedDatabase()
 
   console.log('[DB] Opened and validated:', dbPath)
 }
@@ -280,7 +375,6 @@ function initDatabase() {
   const config = loadConfig()
 
   if (!config || !config.dbPath) {
-    // No config — first launch, never been set up
     setupPaths(getDefaultDbPath())
     dbStatus = 'first-run'
     console.log('[DB] First run — awaiting setup')
@@ -297,133 +391,13 @@ function initDatabase() {
 
   try {
     openAndValidateDb()
-    prepareStatements()
     dbStatus = 'ready'
   } catch (err) {
-    if (db) { try { db.close() } catch {} db = null }
+    if (db) { try { db.close() } catch (_) { /* noop */ } db = null }
     dbStatus = 'corrupt'
     dbStatusError = err.message
     console.error('[DB] Validation failed:', err.message)
   }
-}
-
-// ─── Prepared statements ──────────────────────────────────────────────────────
-
-let stmts = null
-
-function prepareStatements() {
-  if (!db) return
-
-  stmts = {
-    loadProjects:   db.prepare('SELECT * FROM projects ORDER BY created_at'),
-    loadMaps:       db.prepare('SELECT * FROM maps ORDER BY project_id, stamp_year, stamp_month'),
-    loadRows:       db.prepare('SELECT * FROM map_rows ORDER BY map_id, sort_order'),
-    loadValues:     db.prepare('SELECT * FROM row_values'),
-    loadMilestones: db.prepare('SELECT * FROM map_milestones ORDER BY map_id, month_date'),
-
-    upsertProject: db.prepare(`
-      INSERT INTO projects (id, name, studio, status, partner_team, genre, release, platforms, start_date, end_date, notes)
-      VALUES (@id, @name, @studio, @status, @partnerTeam, @genre, @release, @platforms, @startDate, @endDate, @notes)
-      ON CONFLICT(id) DO UPDATE SET
-        name         = excluded.name,
-        studio       = excluded.studio,
-        status       = excluded.status,
-        partner_team = excluded.partner_team,
-        genre        = excluded.genre,
-        release      = excluded.release,
-        platforms    = excluded.platforms,
-        start_date   = excluded.start_date,
-        end_date     = excluded.end_date,
-        notes        = excluded.notes,
-        updated_at   = datetime('now')
-    `),
-
-    upsertMapMeta: db.prepare(`
-      INSERT INTO maps (id, project_id, stamp_year, stamp_month, start_date, end_date, comment, internal_rate, external_rate)
-      VALUES (@id, @projectId, @stampYear, @stampMonth, @startDate, @endDate, @comment, @internalRate, @externalRate)
-      ON CONFLICT(id) DO UPDATE SET
-        stamp_year    = excluded.stamp_year,
-        stamp_month   = excluded.stamp_month,
-        start_date    = excluded.start_date,
-        end_date      = excluded.end_date,
-        comment       = excluded.comment,
-        internal_rate = excluded.internal_rate,
-        external_rate = excluded.external_rate
-    `),
-
-    deleteMapRows:       db.prepare('DELETE FROM map_rows WHERE map_id = ?'),
-    deleteMapMilestones: db.prepare('DELETE FROM map_milestones WHERE map_id = ?'),
-    deleteMap:           db.prepare('DELETE FROM maps WHERE id = ?'),
-    deleteMapsByProject: db.prepare('DELETE FROM maps WHERE project_id = ?'),
-    deleteProject:       db.prepare('DELETE FROM projects WHERE id = ?'),
-
-    insertRow: db.prepare(`
-      INSERT INTO map_rows (id, map_id, section_id, taxonomy_level, taxonomy_key, parent_row_id, label, sort_order, man_month_rate, budget_values)
-      VALUES (@id, @mapId, @sectionId, @taxonomyLevel, @taxonomyKey, @parentRowId, @label, @sortOrder, @manMonthRate, @budgetValues)
-    `),
-
-    insertValue: db.prepare(`
-      INSERT INTO row_values (row_id, month_date, value) VALUES (@rowId, @monthDate, @value)
-    `),
-
-    insertMilestone: db.prepare(`
-      INSERT INTO map_milestones (id, map_id, label, type, month_date, note, phase_boundary)
-      VALUES (@id, @mapId, @label, @type, @monthDate, @note, @phaseBoundary)
-    `),
-  }
-
-  stmts.saveMapTransaction = db.transaction((map) => {
-    stmts.upsertMapMeta.run({
-      id:           map.id,
-      projectId:    map.projectId,
-      stampYear:    map.stampYear,
-      stampMonth:   map.stampMonth,
-      startDate:    map.startDate,
-      endDate:      map.endDate,
-      comment:      map.comment ?? null,
-      internalRate: map.internalRate ?? null,
-      externalRate: map.externalRate ?? null,
-    })
-
-    stmts.deleteMapRows.run(map.id)
-    stmts.deleteMapMilestones.run(map.id)
-
-    map.rows.forEach((row, i) => {
-      stmts.insertRow.run({
-        id:            row.id,
-        mapId:         map.id,
-        sectionId:     row.sectionId,
-        taxonomyLevel: row.taxonomyLevel,
-        taxonomyKey:   row.taxonomyKey ?? null,
-        parentRowId:   row.parentRowId ?? null,
-        label:         row.label,
-        sortOrder:     i,
-        manMonthRate:  row.manMonthRate ?? null,
-        budgetValues:  row.budgetValues ? JSON.stringify(row.budgetValues) : null,
-      })
-
-      Object.entries(row.values).forEach(([monthIdx, value]) => {
-        if (value === null || value === undefined) return
-        stmts.insertValue.run({
-          rowId:     row.id,
-          monthDate: monthIndexToIso(Number(monthIdx)),
-          value,
-        })
-      })
-    })
-
-    map.milestones.forEach((marker) => {
-      stmts.insertMilestone.run({
-        id:            marker.id,
-        mapId:         map.id,
-        label:         marker.label,
-        type:          marker.type,
-        monthDate:     monthIndexToIso(marker.monthIndex),
-        note:          marker.note ?? null,
-        phaseBoundary: marker.phaseBoundary ?? null,
-      })
-    })
-  })
 }
 
 // ─── IPC handlers ─────────────────────────────────────────────────────────────
@@ -455,26 +429,24 @@ function registerIpcHandlers() {
 
       } else if (opts.action === 'choose-folder') {
         const result = await dialog.showOpenDialog(win, {
-          title:      'Choose PRISM data folder',
+          title:       'Choose FRAME data folder',
           buttonLabel: 'Use this folder',
-          properties: ['openDirectory', 'createDirectory'],
+          properties:  ['openDirectory', 'createDirectory'],
         })
         if (result.canceled || !result.filePaths.length) return { ok: false, cancelled: true }
         targetDir = result.filePaths[0]
 
       } else if (opts.action === 'import') {
-        // Step 1: pick where to store the DB
         const folderResult = await dialog.showOpenDialog(win, {
-          title:       'Choose where to store the PRISM database',
+          title:       'Choose where to store the FRAME database',
           buttonLabel: 'Use this folder',
           properties:  ['openDirectory', 'createDirectory'],
         })
         if (folderResult.canceled || !folderResult.filePaths.length) return { ok: false, cancelled: true }
         targetDir = folderResult.filePaths[0]
 
-        // Step 2: pick the existing DB file to import from
         const fileResult = await dialog.showOpenDialog(win, {
-          title:      'Select existing PRISM database',
+          title:      'Select existing FRAME database',
           filters:    [{ name: 'SQLite Database', extensions: ['db'] }],
           properties: ['openFile'],
         })
@@ -485,29 +457,23 @@ function registerIpcHandlers() {
         fs.copyFileSync(fileResult.filePaths[0], targetDbPath)
         saveConfig({ dbPath: targetDbPath })
 
-        // Close any existing connection and open the imported file
-        if (db) { try { db.close() } catch {} db = null }
-        stmts = null
+        if (db) { try { db.close() } catch (_) { /* noop */ } db = null }
         setupPaths(targetDbPath)
 
         openAndValidateDb()
-        prepareStatements()
         dbStatus = 'ready'
         dbStatusError = null
         return { ok: true, dbPath: targetDbPath }
       }
 
-      // use-default or choose-folder: create a fresh DB
       const targetDbPath = path.join(targetDir, 'frame.db')
       fs.mkdirSync(targetDir, { recursive: true })
       saveConfig({ dbPath: targetDbPath })
 
-      if (db) { try { db.close() } catch {} db = null }
-      stmts = null
+      if (db) { try { db.close() } catch (_) { /* noop */ } db = null }
       setupPaths(targetDbPath)
 
       openAndValidateDb()
-      prepareStatements()
       dbStatus = 'ready'
       dbStatusError = null
       return { ok: true, dbPath: targetDbPath }
@@ -518,15 +484,12 @@ function registerIpcHandlers() {
     }
   })
 
-  // Wipe the corrupt/missing DB at the current path and start fresh
   ipcMain.handle('db:wipe-and-reset', async () => {
     try {
-      if (db) { try { db.close() } catch {} db = null }
-      stmts = null
+      if (db) { try { db.close() } catch (_) { /* noop */ } db = null }
       if (dbPath && fs.existsSync(dbPath)) fs.unlinkSync(dbPath)
 
       openAndValidateDb()
-      prepareStatements()
       dbStatus = 'ready'
       dbStatusError = null
       return { ok: true, dbPath }
@@ -536,13 +499,12 @@ function registerIpcHandlers() {
     }
   })
 
-  // Move the live database to a new folder chosen by the user
   ipcMain.handle('db:move', async (event) => {
     if (!db || !dbPath) return { ok: false, error: 'No database open' }
     try {
       const win = BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow()
       const result = await dialog.showOpenDialog(win, {
-        title:       'Choose new PRISM data folder',
+        title:       'Choose new FRAME data folder',
         buttonLabel: 'Move here',
         properties:  ['openDirectory', 'createDirectory'],
       })
@@ -553,27 +515,20 @@ function registerIpcHandlers() {
 
       if (newDbPath === dbPath) return { ok: false, error: 'That is already the current database location.' }
 
-      // Checkpoint WAL so the copy is a complete, self-contained file
       db.pragma('wal_checkpoint(TRUNCATE)')
 
-      // Copy to the new location
       fs.mkdirSync(newDir, { recursive: true })
       fs.copyFileSync(dbPath, newDbPath)
 
-      // Close current connection, update globals
       db.close()
       db = null
-      stmts = null
       const oldPath = dbPath
       setupPaths(newDbPath)
       saveConfig({ dbPath: newDbPath })
 
-      // Reopen from new location
       openAndValidateDb()
-      prepareStatements()
       dbStatus = 'ready'
 
-      // Remove old file (move semantics) — best-effort, don't fail if it can't be deleted
       try { fs.unlinkSync(oldPath) } catch (e) {
         console.warn('[DB] Could not remove old database file:', e.message)
       }
@@ -583,11 +538,9 @@ function registerIpcHandlers() {
 
     } catch (err) {
       console.error('[DB] Move failed:', err.message)
-      // Attempt to recover: reopen the original file if it still exists
       if (!db && dbPath && fs.existsSync(dbPath)) {
         try {
           openAndValidateDb()
-          prepareStatements()
           dbStatus = 'ready'
         } catch (recoverErr) {
           dbStatus = 'corrupt'
@@ -596,200 +549,6 @@ function registerIpcHandlers() {
       }
       return { ok: false, error: err.message }
     }
-  })
-
-  // ── Picklists ──────────────────────────────────────────────────────────────
-
-  ipcMain.handle('db:load-picklists', () => {
-    if (!db) return {}
-    const rows   = db.prepare('SELECT * FROM picklists ORDER BY list_type, sort_order').all()
-    const result = {}
-    for (const r of rows) {
-      if (!result[r.list_type]) result[r.list_type] = []
-      result[r.list_type].push({ id: r.id, label: r.label, sortOrder: r.sort_order, color: r.color ?? undefined, value: r.value ?? undefined })
-    }
-    return result
-  })
-
-  ipcMain.handle('db:save-picklists', (event, picklists) => {
-    if (!db) return { ok: false }
-    db.transaction(() => {
-      db.prepare('DELETE FROM picklists').run()
-      const insert = db.prepare(
-        'INSERT INTO picklists (id, list_type, label, sort_order, color, value) VALUES (@id, @listType, @label, @sortOrder, @color, @value)'
-      )
-      for (const [listType, items] of Object.entries(picklists)) {
-        for (const item of items) {
-          insert.run({ id: item.id, listType, label: item.label, sortOrder: item.sortOrder, color: item.color ?? null, value: item.value ?? null })
-        }
-      }
-    })()
-    return { ok: true }
-  })
-
-  // ── Taxonomy ───────────────────────────────────────────────────────────────
-
-  ipcMain.handle('db:load-taxonomy', () => {
-    if (!db) return []
-    return db.prepare('SELECT * FROM taxonomy_entries ORDER BY sort_order').all().map((r) => ({
-      id:        r.id,
-      label:     r.label,
-      color:     r.color ?? undefined,
-      parentId:  r.parent_id ?? undefined,
-      level:     r.level,
-      sortOrder: r.sort_order,
-    }))
-  })
-
-  ipcMain.handle('db:save-taxonomy', (event, entries) => {
-    if (!db) return { ok: false }
-    db.transaction(() => {
-      db.prepare('DELETE FROM taxonomy_entries').run()
-      const insert = db.prepare(`
-        INSERT INTO taxonomy_entries (id, parent_id, label, level, color, sort_order)
-        VALUES (@id, @parentId, @label, @level, @color, @sortOrder)
-      `)
-      for (const e of entries) {
-        insert.run({
-          id:        e.id,
-          parentId:  e.parentId ?? null,
-          label:     e.label,
-          level:     e.level,
-          color:     e.color ?? null,
-          sortOrder: e.sortOrder,
-        })
-      }
-    })()
-    return { ok: true }
-  })
-
-  // ── Projects & Maps ────────────────────────────────────────────────────────
-
-  ipcMain.handle('db:load-all', () => {
-    if (!db || !stmts) return { projects: [], maps: {} }
-
-    const projectRows   = stmts.loadProjects.all()
-    const mapRows       = stmts.loadMaps.all()
-    const rows          = stmts.loadRows.all()
-    const values        = stmts.loadValues.all()
-    const milestoneRows = stmts.loadMilestones.all()
-
-    const valuesByRowId = {}
-    for (const v of values) {
-      if (!valuesByRowId[v.row_id]) valuesByRowId[v.row_id] = {}
-      valuesByRowId[v.row_id][v.month_date] = v.value
-    }
-
-    const milestonesByMapId = {}
-    for (const ms of milestoneRows) {
-      if (!milestonesByMapId[ms.map_id]) milestonesByMapId[ms.map_id] = []
-      milestonesByMapId[ms.map_id].push({
-        id:            ms.id,
-        label:         ms.label,
-        type:          ms.type,
-        monthIndex:    isoToMonthIndex(ms.month_date),
-        note:          ms.note ?? undefined,
-        phaseBoundary: ms.phase_boundary ?? undefined,
-      })
-    }
-
-    const rowsByMapId = {}
-    for (const row of rows) {
-      if (!rowsByMapId[row.map_id]) rowsByMapId[row.map_id] = []
-
-      const valuesRecord = {}
-      for (let i = 1; i <= 120; i++) valuesRecord[i] = null
-      const stored = valuesByRowId[row.id] ?? {}
-      for (const [monthDate, value] of Object.entries(stored)) {
-        valuesRecord[isoToMonthIndex(monthDate)] = value
-      }
-
-      rowsByMapId[row.map_id].push({
-        id:            row.id,
-        label:         row.label,
-        values:        valuesRecord,
-        taxonomyLevel: row.taxonomy_level,
-        parentRowId:   row.parent_row_id ?? undefined,
-        taxonomyKey:   row.taxonomy_key ?? undefined,
-        sectionId:     row.section_id,
-        manMonthRate:  row.man_month_rate ?? undefined,
-        budgetValues:  row.budget_values ? JSON.parse(row.budget_values) : undefined,
-      })
-    }
-
-    const mapsByProjectId = {}
-    for (const map of mapRows) {
-      if (!mapsByProjectId[map.project_id]) mapsByProjectId[map.project_id] = []
-      mapsByProjectId[map.project_id].push({
-        id:           map.id,
-        projectId:    map.project_id,
-        stampYear:    map.stamp_year,
-        stampMonth:   map.stamp_month,
-        startDate:    map.start_date,
-        endDate:      map.end_date,
-        comment:      map.comment ?? undefined,
-        internalRate: map.internal_rate ?? undefined,
-        externalRate: map.external_rate ?? undefined,
-        milestones:   milestonesByMapId[map.id] ?? [],
-        rows:         rowsByMapId[map.id] ?? [],
-      })
-    }
-
-    const projects = projectRows.map(p => ({
-      id:               p.id,
-      name:             p.name,
-      studio:           p.studio ?? '',
-      status:           p.status ?? 'Concept',
-      partnerTeam:      p.partner_team ?? '',
-      genres:           (() => { try { const v = JSON.parse(p.genre ?? '[]'); return Array.isArray(v) ? v : [v].filter(Boolean) } catch { return p.genre ? [p.genre] : [] } })(),
-      platforms:        JSON.parse(p.platforms ?? '[]'),
-      projectStartDate: p.start_date ?? '',
-      projectEndDate:   p.end_date ?? '',
-      notes:            p.notes ?? '',
-    }))
-
-    return { projects, maps: mapsByProjectId }
-  })
-
-  ipcMain.handle('db:save-project', (event, project) => {
-    if (!db || !stmts) return { ok: false }
-    const str  = (v) => (v == null ? null : String(v))
-    const platforms = Array.isArray(project.platforms)
-      ? JSON.stringify(project.platforms)
-      : (typeof project.platforms === 'string' ? project.platforms : '[]')
-    stmts.upsertProject.run({
-      id:          str(project.id),
-      name:        str(project.name) ?? '',
-      studio:      str(project.studio) ?? '',
-      status:      str(project.status) ?? 'Concept',
-      partnerTeam: str(project.partnerTeam),
-      genre:       JSON.stringify(Array.isArray(project.genres) ? project.genres : []),
-      release:     '',
-      platforms,
-      startDate:   str(project.projectStartDate),
-      endDate:     str(project.projectEndDate),
-      notes:       str(project.notes),
-    })
-    return { ok: true }
-  })
-
-  ipcMain.handle('db:save-map', (event, map) => {
-    if (!db || !stmts) return { ok: false }
-    stmts.saveMapTransaction(map)
-    return { ok: true }
-  })
-
-  ipcMain.handle('db:delete-map', (event, mapId) => {
-    if (!db || !stmts) return { ok: false }
-    stmts.deleteMap.run(mapId)
-    return { ok: true }
-  })
-
-  ipcMain.handle('db:delete-project', (event, projectId) => {
-    if (!db || !stmts) return { ok: false }
-    stmts.deleteMapsByProject.run(projectId)
-    stmts.deleteProject.run(projectId)
-    return { ok: true }
   })
 
   // ── Backup / export / import ───────────────────────────────────────────────
@@ -804,13 +563,13 @@ function registerIpcHandlers() {
     if (!backupsDir || !fs.existsSync(backupsDir)) return []
     try {
       return fs.readdirSync(backupsDir)
-        .filter(f => f.startsWith('prism-') && f.endsWith('.db'))
+        .filter(f => f.startsWith('frame-') && f.endsWith('.db'))
         .sort()
         .reverse()
         .map(filename => {
           const fullPath = path.join(backupsDir, filename)
           const stat     = fs.statSync(fullPath)
-          const datePart = filename.replace('prism-', '').replace('.db', '')
+          const datePart = filename.replace('frame-', '').replace('.db', '')
           const iso      = datePart.slice(0, 10) + 'T' + datePart.slice(11).replace(/-/g, ':')
           return { filename, path: fullPath, size: stat.size, isoDate: iso }
         })
@@ -838,8 +597,8 @@ function registerIpcHandlers() {
     try {
       const win = BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow()
       const dialogOpts = {
-        title:       'Export PRISM Database',
-        defaultPath: `prism-export-${new Date().toISOString().slice(0, 10)}.db`,
+        title:       'Export FRAME Database',
+        defaultPath: `frame-export-${new Date().toISOString().slice(0, 10)}.db`,
         filters:     [{ name: 'SQLite Database', extensions: ['db'] }],
       }
       const { filePath, canceled } = win
@@ -858,7 +617,7 @@ function registerIpcHandlers() {
     try {
       const win = BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow()
       const dialogOpts = {
-        title:      'Import PRISM Database',
+        title:      'Import FRAME Database',
         filters:    [{ name: 'SQLite Database', extensions: ['db'] }],
         properties: ['openFile'],
       }
@@ -890,7 +649,7 @@ function registerIpcHandlers() {
   })
 
   ipcMain.handle('shell:open-external', (_event, url) => {
-    const allowed = ['https://github.com/WoodyMonk-mint/PRISM/']
+    const allowed = ['https://github.com/WoodyMonk-mint/FRAME/']
     if (allowed.some((prefix) => url.startsWith(prefix))) {
       shell.openExternal(url)
     }
@@ -942,4 +701,3 @@ app.on('window-all-closed', () => {
   if (db) db.close()
   if (process.platform !== 'darwin') app.quit()
 })
-
