@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import type { Assignee, Category, Status, Task, TaskInput } from '../types'
 import { ALL_PRIORITIES, ALL_STATUSES } from '../types'
 import { ConfirmDialog } from '../components/ConfirmDialog'
+import { MarkDoneDialog } from '../components/MarkDoneDialog'
 import { TaskModal } from '../components/TaskModal'
 import { PriorityPill, StatusPill } from '../components/Pills'
 import { FilterDropdown } from '../components/FilterDropdown'
@@ -74,6 +75,7 @@ export function TaskListView() {
 
   const [modal, setModal]                 = useState<ModalState>({ kind: 'closed' })
   const [confirmDelete, setConfirmDelete] = useState<Task | null>(null)
+  const [confirmDone, setConfirmDone]     = useState<Task | null>(null)
 
   // Right-click context menu on task rows.
   const [ctxMenu, setCtxMenu] = useState<{ task: Task; x: number; y: number } | null>(null)
@@ -359,12 +361,20 @@ export function TaskListView() {
     await reload()
   }
 
-  const markDone = async (task: Task) => {
-    const r = await window.frame.db.updateTask(task.id, {
+  const markDone = async (task: Task, note: string) => {
+    const patch: Parameters<typeof window.frame.db.updateTask>[1] = {
       status:          'DONE',
       completedDate:   todayIso(),
       percentComplete: 100,
-    })
+    }
+    if (note) {
+      const stamped = `[${todayIso()}] Done — ${note}`
+      patch.notes = task.notes && task.notes.trim()
+        ? `${stamped}\n\n${task.notes}`
+        : stamped
+    }
+    const r = await window.frame.db.updateTask(task.id, patch)
+    setConfirmDone(null)
     if (!r.ok) { setError(r.error ?? 'Update failed'); return }
     await reload()
   }
@@ -552,7 +562,6 @@ export function TaskListView() {
           <table className="task-table">
             <thead>
               <tr>
-                <th aria-label="Done" style={{ width: '2.25rem' }}></th>
                 <SortTh col="category" sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="11rem">Category</SortTh>
                 <SortTh col="title"    sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort}>Title</SortTh>
                 <SortTh col="status"   sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="7rem">Status</SortTh>
@@ -572,7 +581,7 @@ export function TaskListView() {
                   <Fragment key={g.key}>
                     {showHeader && (
                       <tr className="group-header" onClick={() => toggleGroup(g.key)}>
-                        <td colSpan={10}>
+                        <td colSpan={9}>
                           <span className={`group-header-chevron ${collapsed ? '' : 'group-header-chevron-open'}`}>▶</span>
                           <span className="group-header-label">{g.label}</span>
                           <span className="group-header-count muted">({g.tasks.length})</span>
@@ -591,8 +600,6 @@ export function TaskListView() {
                           categoryColour={categories.find(c => c.id === t.categoryId)?.colour ?? null}
                           onToggle={() => toggleExpand(t.id)}
                           onOpen={(target) => setModal({ kind: 'edit', task: target })}
-                          onMarkDone={(target) => markDone(target)}
-                          onUndone={(target) => undone(target)}
                           onAddSubtask={() => setModal({ kind: 'add-subtask', parent: t })}
                           onContextMenu={(target, x, y) => setCtxMenu({ task: target, x, y })}
                         />
@@ -639,6 +646,14 @@ export function TaskListView() {
         />
       )}
 
+      {confirmDone && (
+        <MarkDoneDialog
+          taskTitle={confirmDone.title}
+          onCancel={() => setConfirmDone(null)}
+          onConfirm={(note) => markDone(confirmDone, note)}
+        />
+      )}
+
       {ctxMenu && (() => {
         const t       = ctxMenu.task
         const isDone  = t.status === 'DONE'
@@ -655,7 +670,7 @@ export function TaskListView() {
           { kind: 'item', label: 'Add subtask', onSelect: () => setModal({ kind: 'add-subtask', parent: t }), disabled: !canSub },
           { kind: 'item', label: markLabel,
             disabled: blockedFromDone,
-            onSelect: () => isDone ? undone(t) : markDone(t) },
+            onSelect: () => isDone ? undone(t) : setConfirmDone(t) },
           { kind: 'divider' },
           { kind: 'item', label: 'Delete…', danger: true, onSelect: () => setConfirmDelete(t) },
         ]
@@ -701,7 +716,7 @@ function SortTh({
 
 function RowGroup({
   task, children, isExpanded, categoryColour,
-  onToggle, onOpen, onMarkDone, onUndone, onAddSubtask, onContextMenu,
+  onToggle, onOpen, onAddSubtask, onContextMenu,
 }: {
   task:           Task
   children:       Task[]
@@ -709,16 +724,12 @@ function RowGroup({
   categoryColour: string | null
   onToggle:       () => void
   onOpen:         (t: Task) => void
-  onMarkDone:     (t: Task) => void
-  onUndone:       (t: Task) => void
   onAddSubtask:   () => void
   onContextMenu:  (t: Task, x: number, y: number) => void
 }) {
   const hasChildren = children.length > 0
   const displayPercent = effectivePercent(task, children)
   const isAuto = hasChildren && !task.percentManual
-  const openCount = openSubtaskCount(children)
-  const blockedFromDone = openCount > 0 && task.status !== 'DONE'
 
   return (
     <>
@@ -730,13 +741,9 @@ function RowGroup({
         onToggle={onToggle}
         categoryColour={categoryColour}
         onOpen={() => onOpen(task)}
-        onMarkDone={() => onMarkDone(task)}
-        onUndone={() => onUndone(task)}
         onContextMenu={(x, y) => onContextMenu(task, x, y)}
         displayPercent={displayPercent}
         percentMode={hasChildren ? (task.percentManual ? 'manual' : 'auto') : 'leaf'}
-        blockedFromDone={blockedFromDone}
-        blockedReason={blockedFromDone ? `${openCount} open subtask${openCount === 1 ? '' : 's'}` : null}
       />
       {isExpanded && children.map(c => (
         <TaskRow
@@ -748,19 +755,15 @@ function RowGroup({
           onToggle={() => {}}
           categoryColour={categoryColour}
           onOpen={() => onOpen(c)}
-          onMarkDone={() => onMarkDone(c)}
-          onUndone={() => onUndone(c)}
           onContextMenu={(x, y) => onContextMenu(c, x, y)}
           displayPercent={c.percentComplete}
           percentMode="leaf"
-          blockedFromDone={false}
-          blockedReason={null}
         />
       ))}
       {isExpanded && (
         <tr className="add-subtask-row">
           <td></td>
-          <td colSpan={9}>
+          <td colSpan={8}>
             <button type="button" className="add-subtask-btn" onClick={onAddSubtask}>
               + Add subtask
             </button>
@@ -778,8 +781,8 @@ function RowGroup({
 
 function TaskRow({
   task, depth, canExpand, isExpanded, onToggle,
-  categoryColour, onOpen, onMarkDone, onUndone, onContextMenu,
-  displayPercent, percentMode, blockedFromDone, blockedReason,
+  categoryColour, onOpen, onContextMenu,
+  displayPercent, percentMode,
 }: {
   task:            Task
   depth:           number
@@ -788,13 +791,9 @@ function TaskRow({
   onToggle:        () => void
   categoryColour:  string | null
   onOpen:          () => void
-  onMarkDone:      () => void
-  onUndone:        () => void
   onContextMenu:   (x: number, y: number) => void
   displayPercent:  number
   percentMode:     'auto' | 'manual' | 'leaf'
-  blockedFromDone: boolean
-  blockedReason:   string | null
 }) {
   const overdue = isOverdue(task.dueDate, task.status)
   const isDone  = task.status === 'DONE'
@@ -806,22 +805,6 @@ function TaskRow({
       onClick={onOpen}
       onContextMenu={e => { e.preventDefault(); onContextMenu(e.clientX, e.clientY) }}
     >
-      <td onClick={e => e.stopPropagation()}>
-        <input
-          type="checkbox"
-          className="task-checkbox"
-          checked={isDone}
-          disabled={blockedFromDone}
-          onChange={() => isDone ? onUndone() : onMarkDone()}
-          title={
-            isDone
-              ? 'Mark not done'
-              : blockedFromDone
-                ? `Cannot mark done — ${blockedReason}`
-                : 'Mark done'
-          }
-        />
-      </td>
       <td>
         {!isSubtask && (
           <span className="category-cell">
