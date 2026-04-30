@@ -1,7 +1,10 @@
-// FRAME types — Iteration 0 stub
-// Full types to be defined in Iteration 1
+// FRAME shared renderer types — Iteration 0
+// Domain types (Task, Category, Assignee, Workflow*) land in Iteration 1+.
 
-export type NavView = {
-  id: string
-  label: string
+export type ViewId = 'tasks' | 'my-work' | 'dashboard' | 'calendar' | 'settings'
+
+export type ViewDef = {
+  id:             ViewId
+  label:          string
+  iterationNote:  string
 }

@@ -4,8 +4,8 @@ import { execSync } from 'child_process'
 
 function gitInfo() {
   try {
-    const hash  = execSync('git rev-parse --short HEAD', { cwd: '../' }).toString().trim()
-    const count = execSync('git rev-list --count HEAD', { cwd: '../' }).toString().trim()
+    const hash  = execSync('git rev-parse --short HEAD').toString().trim()
+    const count = execSync('git rev-list --count HEAD').toString().trim()
     const date  = new Date().toISOString().slice(0, 10)
     return { hash, count, date }
   } catch {
