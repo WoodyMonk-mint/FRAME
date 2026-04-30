@@ -11,12 +11,13 @@ type ModalState =
   | { kind: 'add' }
   | { kind: 'edit'; task: Task }
 
-const DEFAULT_VISIBLE: Set<Status> = new Set(['PLANNING', 'WIP', 'BLOCKED'])
+const DEFAULT_VISIBLE: Set<Status> = new Set(['PLANNING', 'WIP', 'BLOCKED', 'ON_HOLD'])
 
 const STATUS_LABEL: Record<Status, string> = {
   PLANNING:  'Planning',
   WIP:       'In progress',
   BLOCKED:   'Blocked',
+  ON_HOLD:   'On hold',
   DONE:      'Done',
   CANCELLED: 'Cancelled',
 }

@@ -4,13 +4,14 @@ const STATUS_LABEL: Record<Status, string> = {
   PLANNING:  'Planning',
   WIP:       'In progress',
   BLOCKED:   'Blocked',
+  ON_HOLD:   'On hold',
   DONE:      'Done',
   CANCELLED: 'Cancelled',
 }
 
 export function StatusPill({ status }: { status: Status }) {
   return (
-    <span className={`pill pill-status pill-status-${status.toLowerCase()}`}>
+    <span className={`pill pill-status pill-status-${status.toLowerCase().replace('_', '-')}`}>
       {STATUS_LABEL[status]}
     </span>
   )

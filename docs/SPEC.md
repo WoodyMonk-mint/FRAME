@@ -47,8 +47,11 @@ Category (predefined picklist — managed in Settings)
 | PLANNING | Not yet started |
 | WIP | In progress |
 | BLOCKED | Stalled — blocker recorded separately |
+| ON_HOLD | Deliberately paused — not actively waiting on a blocker |
 | DONE | Complete |
 | CANCELLED | No longer needed |
+
+`BLOCKED` and `ON_HOLD` differ in intent: BLOCKED means we're waiting on something external (`blocked_reason` records what); ON_HOLD means we've chosen to pause it.
 
 ### 2.4 Priority
 

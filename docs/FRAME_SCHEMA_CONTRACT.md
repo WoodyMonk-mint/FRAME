@@ -74,7 +74,7 @@ For ad-hoc reads, key indexes already exist on `tasks(status, due_date, category
 - `task_snapshots` — agents may insert when taking on-demand snapshots; never updated.
 
 ### 5.4 Status transitions
-Allowed `tasks.status` values: `PLANNING`, `WIP`, `BLOCKED`, `DONE`, `CANCELLED`. When moving to `BLOCKED`, set `blocked_reason`. When moving to `DONE`, set `completed_date = date('now')`.
+Allowed `tasks.status` values: `PLANNING`, `WIP`, `BLOCKED`, `ON_HOLD`, `DONE`, `CANCELLED`. When moving to `BLOCKED`, set `blocked_reason`. When moving to `DONE`, set `completed_date = date('now')`.
 
 ### 5.5 Repeating tasks
 Setting a repeating task to `DONE` does **not** auto-create the next occurrence — the renderer handles that with a confirmation dialogue. Agents that want to advance a repeating task should insert the next task as a normal `INSERT` with `recurrence_*` fields copied and `next_due_date` cleared on the parent.

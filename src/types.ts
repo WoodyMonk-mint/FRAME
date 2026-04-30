@@ -11,10 +11,10 @@ export type ViewDef = {
 // ─── Domain ─────────────────────────────────────────────────────────────────
 
 export type TaskType = 'one-off' | 'repeating' | 'workflow'
-export type Status   = 'PLANNING' | 'WIP' | 'BLOCKED' | 'DONE' | 'CANCELLED'
+export type Status   = 'PLANNING' | 'WIP' | 'BLOCKED' | 'ON_HOLD' | 'DONE' | 'CANCELLED'
 export type Priority = 'P0' | 'P1' | 'P2' | 'P3'
 
-export const ALL_STATUSES:   Status[]   = ['PLANNING', 'WIP', 'BLOCKED', 'DONE', 'CANCELLED']
+export const ALL_STATUSES:   Status[]   = ['PLANNING', 'WIP', 'BLOCKED', 'ON_HOLD', 'DONE', 'CANCELLED']
 export const ALL_PRIORITIES: Priority[] = ['P0', 'P1', 'P2', 'P3']
 
 export type Category = {

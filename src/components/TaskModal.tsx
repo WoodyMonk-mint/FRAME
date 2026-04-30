@@ -17,6 +17,7 @@ const STATUS_LABEL: Record<Status, string> = {
   PLANNING:  'Planning',
   WIP:       'In progress',
   BLOCKED:   'Blocked',
+  ON_HOLD:   'On hold',
   DONE:      'Done',
   CANCELLED: 'Cancelled',
 }
@@ -25,7 +26,14 @@ export function TaskModal({ mode, task, categories, assignees, onCancel, onSave,
   const [title, setTitle]                   = useState(task?.title ?? '')
   const [categoryId, setCategoryId]         = useState<number | null>(task?.categoryId ?? (categories[0]?.id ?? null))
   const [primaryOwner, setPrimaryOwner]     = useState<string | null>(task?.primaryOwner ?? null)
-  const [team, setTeam]                     = useState<string[]>(task?.assignees ?? [])
+  // The primary owner is implicitly part of the team; if an existing task's owner
+  // wasn't in the assignee join, treat them as on-team in the modal.
+  const [team, setTeam] = useState<string[]>(() => {
+    const existing = task?.assignees ?? []
+    const owner    = task?.primaryOwner
+    if (owner && !existing.includes(owner)) return [...existing, owner]
+    return existing
+  })
   const [status, setStatus]                 = useState<Status>(task?.status ?? 'PLANNING')
   const [priority, setPriority]             = useState<Priority | null>(task?.priority ?? null)
   const [dueDate, setDueDate]               = useState(task?.dueDate ?? '')
@@ -41,6 +49,14 @@ export function TaskModal({ mode, task, categories, assignees, onCancel, onSave,
     if (status === 'PLANNING' && percentComplete > 0 && mode === 'add') setPercentComplete(0)
     // Note: only auto-bump on add; editing keeps user input
   }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-add the primary owner to the team when it changes. Users can still
+  // un-tick the chip if accountability and execution sit with different people.
+  useEffect(() => {
+    if (primaryOwner) {
+      setTeam(t => t.includes(primaryOwner) ? t : [...t, primaryOwner])
+    }
+  }, [primaryOwner])
 
   const toggleTeam = (name: string) => {
     setTeam(t => t.includes(name) ? t.filter(x => x !== name) : [...t, name])
