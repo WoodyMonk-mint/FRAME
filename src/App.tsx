@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import type { ViewDef, ViewId } from './types'
+import { TaskListView } from './views/TaskListView'
 import './index.css'
 
 // FRAME — Focus, Resource and Activity Management Engine
-// Iteration 0: shell + first-run DB picker + view shells.
 
 const VIEWS: ViewDef[] = [
-  { id: 'tasks',     label: 'Task List', iterationNote: 'Coming in Iteration 1 — Task List Core (CRUD for one-off tasks).' },
+  { id: 'tasks',     label: 'Task List' },
   { id: 'my-work',   label: 'My Work',   iterationNote: 'Coming in Iteration 9 — personal task view filtered to the active user.' },
   { id: 'dashboard', label: 'Dashboard', iterationNote: 'Coming in Iteration 6 — summary cards and charts.' },
   { id: 'calendar',  label: 'Calendar',  iterationNote: 'Coming in Iteration 7 — month/week view with task blocks.' },
@@ -73,12 +73,18 @@ function App() {
         <div className="sidebar-footer muted">v{window.frame.version}</div>
       </aside>
       <main className="main-content">
-        <header className="view-header">
-          <h1>{view.label}</h1>
-        </header>
-        <div className="view-empty">
-          <p className="muted">{view.iterationNote}</p>
-        </div>
+        {view.id === 'tasks' ? (
+          <TaskListView />
+        ) : (
+          <>
+            <header className="view-header">
+              <h1>{view.label}</h1>
+            </header>
+            <div className="view-empty">
+              <p className="muted">{view.iterationNote}</p>
+            </div>
+          </>
+        )}
       </main>
     </div>
   )
