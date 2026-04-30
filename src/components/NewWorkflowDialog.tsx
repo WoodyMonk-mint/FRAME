@@ -1,29 +1,35 @@
 import { useEffect, useRef, useState } from 'react'
 import type { WorkflowTemplate } from '../types'
 import { todayIso } from '../lib/date'
+import { TagInput } from './TagInput'
 
 type Props = {
-  templates: WorkflowTemplate[]
-  onCancel:  () => void
-  onSubmit:  (input: {
-    templateId:  number
-    name:        string
-    gateType:    string | null
-    projectRef:  string | null
-    startDate:   string | null
-    targetDate:  string | null
+  templates:      WorkflowTemplate[]
+  tagSuggestions: string[]
+  onCancel:       () => void
+  onSubmit:       (input: {
+    templateId:       number
+    name:             string
+    gateType:         string | null
+    projectRef:       string | null
+    startDate:        string | null
+    targetDate:       string | null
+    tags:             string[]
+    applyTagsToSteps: boolean
   }) => Promise<void>
 }
 
 const GATE_TYPES = ['Concept', 'VS', 'EFP', 'FP'] as const
 
-export function NewWorkflowDialog({ templates, onCancel, onSubmit }: Props) {
+export function NewWorkflowDialog({ templates, tagSuggestions, onCancel, onSubmit }: Props) {
   const [templateId, setTemplateId] = useState<number | null>(templates[0]?.id ?? null)
   const [name, setName]             = useState('')
   const [gateType, setGateType]     = useState<string | null>(null)
   const [projectRef, setProjectRef] = useState('')
   const [startDate, setStartDate]   = useState(todayIso())
   const [targetDate, setTargetDate] = useState('')
+  const [tags, setTags]                       = useState<string[]>([])
+  const [applyTagsToSteps, setApplyTagsToSteps] = useState(true)
   const [error, setError]           = useState<string | null>(null)
   const [saving, setSaving]         = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
@@ -43,11 +49,13 @@ export function NewWorkflowDialog({ templates, onCancel, onSubmit }: Props) {
     try {
       await onSubmit({
         templateId,
-        name:       name.trim(),
-        gateType:   isGateReview ? gateType : null,
-        projectRef: projectRef.trim() || null,
-        startDate:  startDate || null,
-        targetDate: targetDate || null,
+        name:             name.trim(),
+        gateType:         isGateReview ? gateType : null,
+        projectRef:       projectRef.trim() || null,
+        startDate:        startDate || null,
+        targetDate:       targetDate || null,
+        tags,
+        applyTagsToSteps,
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -119,6 +127,22 @@ export function NewWorkflowDialog({ templates, onCancel, onSubmit }: Props) {
               <input type="date" value={targetDate} onChange={e => setTargetDate(e.target.value)} min="2020-01-01" />
             </label>
           </div>
+
+          <div className="form-field">
+            <span>Tags <em className="muted compact">(optional)</em></span>
+            <TagInput value={tags} onChange={setTags} suggestions={tagSuggestions} />
+          </div>
+
+          {tags.length > 0 && (
+            <label className="inherit-tickbox">
+              <input
+                type="checkbox"
+                checked={applyTagsToSteps}
+                onChange={e => setApplyTagsToSteps(e.target.checked)}
+              />
+              <span>Apply these tags to every step task</span>
+            </label>
+          )}
 
           {tpl && (
             <p className="muted compact" style={{ fontSize: '0.75rem' }}>

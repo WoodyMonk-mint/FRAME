@@ -1,8 +1,12 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import type { Assignee, Category, Status, Task, TaskInput, WorkflowInstance } from '../types'
+import type {
+  Assignee, Category, Status, Task, TaskInput,
+  WorkflowInstance, WorkflowTemplate,
+} from '../types'
 import { ALL_PRIORITIES, ALL_STATUSES } from '../types'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { MarkDoneDialog } from '../components/MarkDoneDialog'
+import { NewWorkflowDialog } from '../components/NewWorkflowDialog'
 import { TaskModal } from '../components/TaskModal'
 import { PriorityPill, StatusPill } from '../components/Pills'
 import { FilterDropdown } from '../components/FilterDropdown'
@@ -75,11 +79,13 @@ function passesWorkflowFilters(i: WorkflowInstance, f: TaskFilters): boolean {
 export function TaskListView() {
   const [tasks, setTasks]           = useState<Task[]>([])
   const [workflows, setWorkflows]   = useState<WorkflowInstance[]>([])
+  const [templates, setTemplates]   = useState<WorkflowTemplate[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [assignees, setAssignees]   = useState<Assignee[]>([])
   const [tagSuggestions, setTagSuggestions] = useState<string[]>([])
   const [loading, setLoading]       = useState(true)
   const [error, setError]           = useState<string | null>(null)
+  const [newWorkflowOpen, setNewWorkflowOpen] = useState(false)
 
   const [expandedIds, setExpandedIds]                 = useState<Set<number>>(new Set())
   const [expandedWorkflowIds, setExpandedWorkflowIds] = useState<Set<number>>(new Set())
@@ -105,15 +111,17 @@ export function TaskListView() {
   const reload = async () => {
     setError(null)
     try {
-      const [t, w, c, a, tg] = await Promise.all([
+      const [t, w, tpl, c, a, tg] = await Promise.all([
         window.frame.db.listTasks(),
         window.frame.db.listWorkflowInstances(),
+        window.frame.db.listWorkflowTemplates(),
         window.frame.db.listCategories(),
         window.frame.db.listAssignees(),
         window.frame.db.listTags(),
       ])
       setTasks(t)
       setWorkflows(w)
+      setTemplates(tpl)
       setCategories(c)
       setAssignees(a)
       setTagSuggestions(tg)
@@ -140,9 +148,10 @@ export function TaskListView() {
     }
     void (async () => {
       try {
-        const [t, w, c, a, tg] = await Promise.all([
+        const [t, w, tpl, c, a, tg] = await Promise.all([
           window.frame.db.listTasks(),
           window.frame.db.listWorkflowInstances(),
+          window.frame.db.listWorkflowTemplates(),
           window.frame.db.listCategories(),
           window.frame.db.listAssignees(),
           window.frame.db.listTags(),
@@ -150,6 +159,7 @@ export function TaskListView() {
         if (!cancelled) {
           setTasks(t)
           setWorkflows(w)
+          setTemplates(tpl)
           setCategories(c)
           setAssignees(a)
           setTagSuggestions(tg)
@@ -474,6 +484,31 @@ export function TaskListView() {
 
   const workflowCount = topRows.filter(r => r.kind === 'workflow').length
 
+  // Sets of IDs for parents and workflows that have something to expand
+  // (children matching the current filter, or any steps).
+  const expandableTaskIds = useMemo(
+    () => topRows.flatMap(r => r.kind === 'task' && (childrenByParent.get(r.task.id)?.length ?? 0) > 0 ? [r.task.id] : []),
+    [topRows, childrenByParent]
+  )
+  const expandableWorkflowIds = useMemo(
+    () => topRows.flatMap(r => r.kind === 'workflow' && (visibleStepsByWorkflowId.get(r.instance.id)?.length ?? 0) > 0 ? [r.instance.id] : []),
+    [topRows, visibleStepsByWorkflowId]
+  )
+  const allExpanded =
+    (expandableTaskIds.length === 0     || expandableTaskIds.every(id => expandedIds.has(id))) &&
+    (expandableWorkflowIds.length === 0 || expandableWorkflowIds.every(id => expandedWorkflowIds.has(id))) &&
+    (expandableTaskIds.length + expandableWorkflowIds.length > 0)
+
+  const toggleExpandAll = () => {
+    if (allExpanded) {
+      setExpandedIds(new Set())
+      setExpandedWorkflowIds(new Set())
+    } else {
+      setExpandedIds(new Set(expandableTaskIds))
+      setExpandedWorkflowIds(new Set(expandableWorkflowIds))
+    }
+  }
+
   return (
     <div className="task-view">
       <header className="view-header view-header-row">
@@ -485,7 +520,18 @@ export function TaskListView() {
           </p>
         </div>
         <div className="header-actions">
+          <button
+            className="chip"
+            onClick={toggleExpandAll}
+            disabled={expandableTaskIds.length + expandableWorkflowIds.length === 0}
+          >{allExpanded ? 'Collapse all' : 'Expand all'}</button>
           <button className="chip" onClick={exportCsv}>Export CSV</button>
+          <button
+            className="chip"
+            onClick={() => setNewWorkflowOpen(true)}
+            disabled={templates.length === 0}
+            title={templates.length === 0 ? 'No templates available' : undefined}
+          >+ New workflow</button>
           <button className="primary-button" onClick={() => setModal({ kind: 'add' })}>+ Add task</button>
         </div>
       </header>
@@ -617,7 +663,7 @@ export function TaskListView() {
                 <SortTh col="category" sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="11rem">Category</SortTh>
                 <SortTh col="title"    sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort}>Title</SortTh>
                 <SortTh col="status"   sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="7rem">Status</SortTh>
-                <SortTh col="percent"  sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="7.5rem" align="right">%</SortTh>
+                <SortTh col="percent"  sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="7.5rem">%</SortTh>
                 <SortTh col="priority" sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="4rem">Pri</SortTh>
                 <SortTh col="due"      sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="8rem">Due</SortTh>
                 <SortTh col="owner"    sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="8rem">Owner</SortTh>
@@ -721,6 +767,20 @@ export function TaskListView() {
           taskTitle={confirmDone.title}
           onCancel={() => setConfirmDone(null)}
           onConfirm={(date, note) => markDone(confirmDone, date, note)}
+        />
+      )}
+
+      {newWorkflowOpen && (
+        <NewWorkflowDialog
+          templates={templates}
+          tagSuggestions={tagSuggestions}
+          onCancel={() => setNewWorkflowOpen(false)}
+          onSubmit={async (input) => {
+            const r = await window.frame.db.createWorkflowInstance(input)
+            if (!r.ok) throw new Error(r.error ?? 'Create failed')
+            setNewWorkflowOpen(false)
+            await reload()
+          }}
         />
       )}
 
@@ -917,7 +977,6 @@ function RowGroup({
         onOpen={() => onOpen(task)}
         onContextMenu={(x, y) => onContextMenu(task, x, y)}
         displayPercent={displayPercent}
-        percentMode={hasChildren ? (task.percentManual ? 'manual' : 'auto') : 'leaf'}
       />
       {isExpanded && children.map(c => (
         <TaskRow
@@ -931,7 +990,6 @@ function RowGroup({
           onOpen={() => onOpen(c)}
           onContextMenu={(x, y) => onContextMenu(c, x, y)}
           displayPercent={c.percentComplete}
-          percentMode="leaf"
         />
       ))}
       {isExpanded && (
@@ -998,8 +1056,11 @@ function WorkflowRowGroup({
           </span>
         </td>
         <td><StatusPill status={status} /></td>
-        <td style={{ textAlign: 'right' }}>
-          <span className="percent-cell">
+        <td>
+          <span
+            className="percent-cell"
+            title={`${instance.doneSteps}/${instance.totalSteps} steps complete`}
+          >
             <span className="percent-bar">
               <span
                 className={`percent-bar-fill ${instance.percentDone === 100 ? 'is-done' : ''}`}
@@ -1007,10 +1068,6 @@ function WorkflowRowGroup({
               />
             </span>
             <span className="percent-cell-num">{instance.percentDone}</span>
-            <span
-              className="percent-mode-badge percent-mode-auto"
-              title={`${instance.doneSteps}/${instance.totalSteps} steps complete`}
-            >W</span>
           </span>
         </td>
         <td><span className="muted">—</span></td>
@@ -1031,7 +1088,6 @@ function WorkflowRowGroup({
           onOpen={() => onOpenStep(s)}
           onContextMenu={(x, y) => onContextMenu(s, x, y)}
           displayPercent={s.percentComplete}
-          percentMode="leaf"
           stepNumber={s.workflowStepNumber}
         />
       ))}
@@ -1042,7 +1098,7 @@ function WorkflowRowGroup({
 function TaskRow({
   task, depth, canExpand, isExpanded, onToggle,
   categoryColour, onOpen, onContextMenu,
-  displayPercent, percentMode, stepNumber,
+  displayPercent, stepNumber,
 }: {
   task:            Task
   depth:           number
@@ -1053,7 +1109,6 @@ function TaskRow({
   onOpen:          () => void
   onContextMenu:   (x: number, y: number) => void
   displayPercent:  number
-  percentMode:     'auto' | 'manual' | 'leaf'
   stepNumber?:     number | null
 }) {
   const overdue = isOverdue(task.dueDate, task.status)
@@ -1095,7 +1150,7 @@ function TaskRow({
         </span>
       </td>
       <td><StatusPill status={task.status} /></td>
-      <td style={{ textAlign: 'right' }}>
+      <td>
         <span className="percent-cell">
           <span className="percent-bar">
             <span
@@ -1104,8 +1159,6 @@ function TaskRow({
             />
           </span>
           <span className="percent-cell-num">{displayPercent}</span>
-          {percentMode === 'auto'   && <span className="percent-mode-badge percent-mode-auto" title="Auto-computed from subtasks">A</span>}
-          {percentMode === 'manual' && <span className="percent-mode-badge percent-mode-manual" title="Manually overridden">M</span>}
         </span>
       </td>
       <td><PriorityPill priority={task.priority} /></td>

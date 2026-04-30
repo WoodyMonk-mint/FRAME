@@ -6209,6 +6209,30 @@ kbd {
   align-items: center;
 }
 
+.inherit-panel {
+  background: rgba(99, 102, 241, 0.06);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.inherit-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+}
+.inherit-tickbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  user-select: none;
+}
+.inherit-tickbox input[type="checkbox"] {
+  cursor: pointer;
+}
+
 .task-row-subtask td {
   background: rgba(255, 255, 255, 0.012);
   font-size: 0.825rem;
@@ -6257,7 +6281,7 @@ kbd {
 .percent-cell {
   display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 0.35rem;
 }
 .percent-bar {

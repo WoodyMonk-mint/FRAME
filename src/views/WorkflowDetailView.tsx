@@ -196,7 +196,7 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
               <th style={{ width: '3rem' }}>#</th>
               <th>Title</th>
               <th style={{ width: '7rem' }}>Status</th>
-              <th style={{ width: '7.5rem', textAlign: 'right' }}>%</th>
+              <th style={{ width: '7.5rem' }}>%</th>
               <th style={{ width: '8rem' }}>Owner</th>
               <th style={{ width: '8rem' }}>Due</th>
               <th style={{ width: '4rem' }} aria-label="Deviation" />
@@ -230,7 +230,7 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
                   <td className="muted compact">{s.stepNumber}</td>
                   <td className="task-title-cell">{t.title}</td>
                   <td><StatusPill status={t.status} /></td>
-                  <td style={{ textAlign: 'right' }}>
+                  <td>
                     <span className="percent-cell">
                       <span className="percent-bar">
                         <span

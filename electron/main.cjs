@@ -214,6 +214,13 @@ function runSchema() {
       created_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS workflow_instance_tags (
+      id          INTEGER PRIMARY KEY,
+      instance_id INTEGER NOT NULL REFERENCES workflow_instances(id) ON DELETE CASCADE,
+      tag         TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_workflow_instance_tags_instance ON workflow_instance_tags(instance_id);
+
     CREATE TABLE IF NOT EXISTS task_assignees (
       id      INTEGER PRIMARY KEY,
       task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -873,6 +880,14 @@ function registerIpcHandlers() {
       LEFT JOIN categories c ON c.id = t.category_id
       ORDER BY i.created_at DESC
     `).all()
+    if (rows.length === 0) return []
+    const ids = rows.map(r => r.id)
+    const ph = ids.map(() => '?').join(',')
+    const tagRows = db.prepare(
+      `SELECT instance_id, tag FROM workflow_instance_tags WHERE instance_id IN (${ph})`
+    ).all(...ids)
+    const tagsByInstance = {}
+    for (const r of tagRows) (tagsByInstance[r.instance_id] ??= []).push(r.tag)
     return rows.map(r => ({
       id:           r.id,
       templateId:   r.template_id,
@@ -886,6 +901,7 @@ function registerIpcHandlers() {
       targetDate:   r.target_date,
       status:       r.status,
       notes:        r.notes,
+      tags:         tagsByInstance[r.id] ?? [],
       totalSteps:   r.total_steps,
       doneSteps:    r.done_steps,
       percentDone:  r.total_steps > 0 ? Math.round((r.done_steps / r.total_steps) * 100) : 0,
@@ -967,6 +983,10 @@ function registerIpcHandlers() {
         } : null,
       }))
 
+      const instTags = db.prepare(
+        'SELECT tag FROM workflow_instance_tags WHERE instance_id = ?'
+      ).all(id).map(r => r.tag)
+
       return {
         ok: true,
         instance: {
@@ -982,6 +1002,7 @@ function registerIpcHandlers() {
           targetDate:   inst.target_date,
           status:       inst.status,
           notes:        inst.notes,
+          tags:         instTags,
           totalSteps:   steps.length,
           doneSteps:    steps.filter(s => s.task && s.task.status === 'DONE').length,
           percentDone:  steps.length > 0
@@ -1085,6 +1106,16 @@ function registerIpcHandlers() {
         })
         newInstanceId = Number(r.lastInsertRowid)
 
+        // Instance-level tags (always stored). Step propagation is opt-out.
+        const cleanTags = Array.isArray(input.tags)
+          ? [...new Set(input.tags.map(t => String(t).trim()).filter(Boolean))]
+          : []
+        if (cleanTags.length > 0) {
+          const insWfTag = db.prepare('INSERT INTO workflow_instance_tags (instance_id, tag) VALUES (?, ?)')
+          for (const tag of cleanTags) insWfTag.run(newInstanceId, tag)
+        }
+        const propagateTags = input.applyTagsToSteps !== false && cleanTags.length > 0
+
         const steps = db.prepare(`
           SELECT * FROM workflow_template_steps WHERE template_id = ? ORDER BY step_number
         `).all(tpl.id)
@@ -1099,6 +1130,7 @@ function registerIpcHandlers() {
           )
         `)
         const insAssignee = db.prepare('INSERT INTO task_assignees (task_id, name) VALUES (?, ?)')
+        const insTaskTag  = db.prepare('INSERT INTO task_tags (task_id, tag) VALUES (?, ?)')
         const insStep = db.prepare(`
           INSERT INTO workflow_instance_steps (instance_id, template_step_id, task_id, step_number, is_deviation)
           VALUES (?, ?, ?, ?, 0)
@@ -1119,6 +1151,9 @@ function registerIpcHandlers() {
             // Mirror "primary owner auto-joins the team" convention.
             insAssignee.run(taskId, s.default_owner)
           }
+          if (propagateTags) {
+            for (const tag of cleanTags) insTaskTag.run(taskId, tag)
+          }
           insStep.run(newInstanceId, s.id, taskId, s.step_number)
         }
 
@@ -1126,7 +1161,12 @@ function registerIpcHandlers() {
         db.prepare(`
           INSERT INTO audit_log (table_name, row_id, action, changed_by, new_values)
           VALUES ('workflow_instances', ?, 'INSERT', 'user', ?)
-        `).run(newInstanceId, JSON.stringify({ ...newRow, step_count: steps.length }))
+        `).run(newInstanceId, JSON.stringify({
+          ...newRow,
+          step_count: steps.length,
+          tags: cleanTags,
+          propagate_tags: propagateTags,
+        }))
       })
       tx()
       return { ok: true, instanceId: newInstanceId }

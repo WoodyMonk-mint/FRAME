@@ -34,9 +34,19 @@ export function TaskModal({
   categories, assignees, tagSuggestions,
   onCancel, onSave, onDelete, onAddSubtask,
 }: Props) {
+  const isAddSubtask = mode === 'add' && !!parent
+
+  // Inheritance defaults: tags + category copy from the parent on first
+  // render; owner + priority do not. Each tickbox is a copy-or-clear action;
+  // after a toggle the field is independently editable.
+  const [inheritTags,     setInheritTags]     = useState(isAddSubtask)
+  const [inheritCategory, setInheritCategory] = useState(isAddSubtask)
+  const [inheritOwner,    setInheritOwner]    = useState(false)
+  const [inheritPriority, setInheritPriority] = useState(false)
+
   const [title, setTitle]                   = useState(task?.title ?? '')
   const [categoryId, setCategoryId]         = useState<number | null>(
-    task?.categoryId ?? parent?.categoryId ?? (categories[0]?.id ?? null)
+    task?.categoryId ?? (isAddSubtask ? (parent.categoryId ?? null) : (categories[0]?.id ?? null))
   )
   const [primaryOwner, setPrimaryOwner]     = useState<string | null>(task?.primaryOwner ?? null)
   const [team, setTeam] = useState<string[]>(() => {
@@ -45,9 +55,32 @@ export function TaskModal({
     if (owner && !existing.includes(owner)) return [...existing, owner]
     return existing
   })
-  const [tags, setTags]                     = useState<string[]>(task?.tags ?? [])
+  const [tags, setTags]                     = useState<string[]>(
+    task?.tags ?? (isAddSubtask ? parent.tags : [])
+  )
   const [status, setStatus]                 = useState<Status>(task?.status ?? 'PLANNING')
   const [priority, setPriority]             = useState<Priority | null>(task?.priority ?? null)
+
+  const onToggleInheritTags = (next: boolean) => {
+    setInheritTags(next)
+    if (next && parent) setTags(parent.tags)
+    else if (!next)     setTags([])
+  }
+  const onToggleInheritCategory = (next: boolean) => {
+    setInheritCategory(next)
+    if (next && parent) setCategoryId(parent.categoryId ?? null)
+    else if (!next)     setCategoryId(null)
+  }
+  const onToggleInheritOwner = (next: boolean) => {
+    setInheritOwner(next)
+    if (next && parent) setPrimaryOwner(parent.primaryOwner ?? null)
+    else if (!next)     setPrimaryOwner(null)
+  }
+  const onToggleInheritPriority = (next: boolean) => {
+    setInheritPriority(next)
+    if (next && parent) setPriority(parent.priority ?? null)
+    else if (!next)     setPriority(null)
+  }
   const [dueDate, setDueDate]               = useState(task?.dueDate ?? '')
   const [percentComplete, setPercentComplete] = useState(task?.percentComplete ?? 0)
   const [percentManual, setPercentManual]   = useState<boolean>(task?.percentManual ?? false)
@@ -136,6 +169,30 @@ export function TaskModal({
           <p className="muted compact subtask-context">
             Subtask of <strong>{parent.title}</strong>
           </p>
+        )}
+
+        {isAddSubtask && (
+          <div className="inherit-panel">
+            <p className="panel-label" style={{ marginBottom: '0.4rem' }}>Inherit from parent</p>
+            <div className="inherit-row">
+              <label className="inherit-tickbox">
+                <input type="checkbox" checked={inheritTags}     onChange={e => onToggleInheritTags(e.target.checked)} />
+                <span>Tags{parent.tags.length > 0 && <em className="muted compact"> ({parent.tags.length})</em>}</span>
+              </label>
+              <label className="inherit-tickbox">
+                <input type="checkbox" checked={inheritCategory} onChange={e => onToggleInheritCategory(e.target.checked)} />
+                <span>Category</span>
+              </label>
+              <label className="inherit-tickbox">
+                <input type="checkbox" checked={inheritOwner}    onChange={e => onToggleInheritOwner(e.target.checked)} />
+                <span>Primary owner</span>
+              </label>
+              <label className="inherit-tickbox">
+                <input type="checkbox" checked={inheritPriority} onChange={e => onToggleInheritPriority(e.target.checked)} />
+                <span>Priority</span>
+              </label>
+            </div>
+          </div>
         )}
 
         {error && <div className="setup-error">{error}</div>}

@@ -101,6 +101,7 @@ export type WorkflowInstance = {
   targetDate:    string | null
   status:        string
   notes:         string | null
+  tags:          string[]
   totalSteps:    number
   doneSteps:     number
   percentDone:   number
@@ -109,12 +110,14 @@ export type WorkflowInstance = {
 }
 
 export type NewWorkflowInput = {
-  templateId:  number
-  name:        string
-  gateType?:   string | null
-  projectRef?: string | null
-  startDate?:  string | null
-  targetDate?: string | null
+  templateId:        number
+  name:              string
+  gateType?:         string | null
+  projectRef?:       string | null
+  startDate?:        string | null
+  targetDate?:       string | null
+  tags?:             string[]
+  applyTagsToSteps?: boolean
 }
 
 export type WorkflowStep = {

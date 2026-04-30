@@ -15,6 +15,7 @@ export function WorkflowsView() {
 function WorkflowsList({ onSelect }: { onSelect: (id: number) => void }) {
   const [instances, setInstances] = useState<WorkflowInstance[]>([])
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([])
+  const [tagSuggestions, setTagSuggestions] = useState<string[]>([])
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState<string | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -22,12 +23,14 @@ function WorkflowsList({ onSelect }: { onSelect: (id: number) => void }) {
   const reload = async () => {
     setError(null)
     try {
-      const [insts, tpls] = await Promise.all([
+      const [insts, tpls, tags] = await Promise.all([
         window.frame.db.listWorkflowInstances(),
         window.frame.db.listWorkflowTemplates(),
+        window.frame.db.listTags(),
       ])
       setInstances(insts)
       setTemplates(tpls)
+      setTagSuggestions(tags)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -112,6 +115,7 @@ function WorkflowsList({ onSelect }: { onSelect: (id: number) => void }) {
       {dialogOpen && (
         <NewWorkflowDialog
           templates={templates}
+          tagSuggestions={tagSuggestions}
           onCancel={() => setDialogOpen(false)}
           onSubmit={handleCreate}
         />
