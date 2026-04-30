@@ -27,10 +27,13 @@ Schema is governed by `docs/FRAME_SCHEMA_CONTRACT.md`.
 
 Seeding is idempotent — runs only on first DB open against empty tables.
 
+## Smoke Test Status
+- **Linux (X11):** ✅ verified 2026-04-30. `npm run dev` boots cleanly, first-run picker appears, "Use default location" creates `~/.config/frame/frame.db` with 13 tables, 3 views, 8 indexes, and all seed data (6 categories with colours, 6 assignees, Gate Review 15 steps, Production Analysis 8 steps).
+- **Windows:** not yet verified. Woody should `git pull`, `npm install` (postinstall calls `electron-builder install-app-deps` to rebuild better-sqlite3 against Electron's Node ABI), then `npm run dev` and confirm the same flow ends with the main shell rendering.
+
 ## Known Issues / Backlog
-- **End-to-end smoke test on Windows still required.** This Linux session can compile (vite build + tsc) but cannot run the Electron app. Woody should `git pull` on his Windows machine, run `npm install` (postinstall calls `electron-builder install-app-deps` to rebuild better-sqlite3), then `npm run dev` and confirm the first-run picker appears, choosing "Use default location" creates a populated frame.db.
 - Robocopy sync to `Z:\OC working files\FRAME\` from the handoff is Windows-specific. On this Linux dev machine the source of truth is GitHub — every change is committed and pushed, Windows pulls.
-- `package.json` build config still names some Windows packaging targets — untested until the first packaging run (Iteration 10 territory).
+- `package.json` build config still names Windows / Mac / Linux packaging targets — untested until the first packaging run (Iteration 10 territory).
 - Spec §12 lists iteration 9 twice (My Work + Settings) — minor doc inconsistency, parked for next spec rev.
 - Light theme stretch goal (Iteration 10).
 
