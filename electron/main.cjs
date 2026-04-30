@@ -664,7 +664,7 @@ function createWindow() {
     height: 960,
     minWidth:  1200,
     minHeight: 760,
-    backgroundColor: '#0f1117',
+    backgroundColor: '#1a1a1d',
     title: 'FRAME',
     webPreferences: {
       preload:          path.join(__dirname, 'preload.cjs'),
