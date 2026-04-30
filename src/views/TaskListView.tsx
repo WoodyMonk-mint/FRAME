@@ -6,6 +6,7 @@ import { TaskModal } from '../components/TaskModal'
 import { PriorityPill, StatusPill } from '../components/Pills'
 import { FilterDropdown } from '../components/FilterDropdown'
 import { SavedViewsDropdown } from '../components/SavedViewsDropdown'
+import { SingleSelectDropdown } from '../components/SingleSelectDropdown'
 import type { DueRange } from '../lib/date'
 import { formatDate, isOverdue, todayIso } from '../lib/date'
 import { effectivePercent } from '../lib/percent'
@@ -485,15 +486,16 @@ export function TaskListView() {
           onShowAll={() => showAll('excludedOwners')}
         />
 
-        <label className="group-by-control" onClick={e => e.stopPropagation()}>
-          <span className="muted compact">Due:</span>
-          <select
-            value={filters.dueRange}
-            onChange={e => updateFilters({ dueRange: e.target.value as DueRange })}
-          >
-            {DUE_RANGE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-        </label>
+        <SingleSelectDropdown
+          label="Due"
+          options={DUE_RANGE_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
+          selected={filters.dueRange}
+          defaultValue="all"
+          isOpen={openDropdown === 'due'}
+          onOpen={() => setOpenDropdown('due')}
+          onClose={() => setOpenDropdown(null)}
+          onChange={(v) => updateFilters({ dueRange: v as DueRange })}
+        />
 
         {tagSuggestions.length > 0 && (
           <FilterDropdown
@@ -516,15 +518,21 @@ export function TaskListView() {
 
         <div className="filter-bar-spacer" />
 
-        <label className="group-by-control" onClick={e => e.stopPropagation()}>
-          <span className="muted compact">Group:</span>
-          <select value={groupBy} onChange={e => setGroupBy(e.target.value as GroupBy)}>
-            <option value="none">None</option>
-            <option value="category">Category</option>
-            <option value="status">Status</option>
-            <option value="owner">Owner</option>
-          </select>
-        </label>
+        <SingleSelectDropdown
+          label="Group"
+          options={[
+            { value: 'none',     label: 'None' },
+            { value: 'category', label: 'Category' },
+            { value: 'status',   label: 'Status' },
+            { value: 'owner',    label: 'Owner' },
+          ]}
+          selected={groupBy}
+          defaultValue="none"
+          isOpen={openDropdown === 'group'}
+          onOpen={() => setOpenDropdown('group')}
+          onClose={() => setOpenDropdown(null)}
+          onChange={(v) => setGroupBy(v as GroupBy)}
+        />
       </div>
 
       {visibleTopLevel.length === 0 ? (

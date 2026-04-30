@@ -6412,3 +6412,18 @@ kbd {
   color: var(--indigo);
   letter-spacing: 0;
 }
+
+/* ── Iteration 2.x: SingleSelectDropdown label prefix ──────────────── */
+
+.dash-filter-label-prefix {
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.dash-filter-btn.has-exclusions .dash-filter-label-prefix {
+  color: rgba(165, 180, 252, 0.85);
+}
+.dash-filter-label-value {
+  font-weight: 500;
+}
