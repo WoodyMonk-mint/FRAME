@@ -11,6 +11,7 @@ function App() {
         <div className="sidebar-logo">FRAME</div>
         <nav className="sidebar-nav">
           <a className="nav-item nav-item-active">Task List</a>
+          <a className="nav-item">My Work</a>
           <a className="nav-item">Dashboard</a>
           <a className="nav-item">Calendar</a>
           <a className="nav-item">Settings</a>
