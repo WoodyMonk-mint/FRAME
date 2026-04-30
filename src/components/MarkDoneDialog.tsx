@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
+import { todayIso } from '../lib/date'
 
 type Props = {
   taskTitle: string
   onCancel:  () => void
-  onConfirm: (note: string) => void
+  onConfirm: (completedDate: string, note: string) => void
 }
 
 export function MarkDoneDialog({ taskTitle, onCancel, onConfirm }: Props) {
+  const [completedDate, setCompletedDate] = useState(todayIso())
   const [note, setNote] = useState('')
+  const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
 
@@ -16,8 +19,9 @@ export function MarkDoneDialog({ taskTitle, onCancel, onConfirm }: Props) {
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
     if (submitting) return
+    if (!completedDate) { setError('Completion date is required.'); return }
     setSubmitting(true)
-    onConfirm(note.trim())
+    onConfirm(completedDate, note.trim())
   }
 
   return (
@@ -25,7 +29,18 @@ export function MarkDoneDialog({ taskTitle, onCancel, onConfirm }: Props) {
       <div className="dialog-card" onClick={e => e.stopPropagation()}>
         <p className="panel-label">Confirm</p>
         <h3>Mark "{taskTitle}" done?</h3>
+        {error && <div className="setup-error">{error}</div>}
         <form onSubmit={submit} className="task-form">
+          <label className="form-field">
+            <span>Completed</span>
+            <input
+              type="date"
+              value={completedDate}
+              onChange={e => setCompletedDate(e.target.value)}
+              min="2020-01-01"
+              required
+            />
+          </label>
           <label className="form-field">
             <span>Note <em className="muted compact">(optional — saved to the task's notes)</em></span>
             <textarea

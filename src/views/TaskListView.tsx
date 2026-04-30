@@ -361,14 +361,14 @@ export function TaskListView() {
     await reload()
   }
 
-  const markDone = async (task: Task, note: string) => {
+  const markDone = async (task: Task, completedDate: string, note: string) => {
     const patch: Parameters<typeof window.frame.db.updateTask>[1] = {
       status:          'DONE',
-      completedDate:   todayIso(),
+      completedDate,
       percentComplete: 100,
     }
     if (note) {
-      const stamped = `[${todayIso()}] Done — ${note}`
+      const stamped = `[${completedDate}] Done — ${note}`
       patch.notes = task.notes && task.notes.trim()
         ? `${stamped}\n\n${task.notes}`
         : stamped
@@ -650,7 +650,7 @@ export function TaskListView() {
         <MarkDoneDialog
           taskTitle={confirmDone.title}
           onCancel={() => setConfirmDone(null)}
-          onConfirm={(note) => markDone(confirmDone, note)}
+          onConfirm={(date, note) => markDone(confirmDone, date, note)}
         />
       )}
 
