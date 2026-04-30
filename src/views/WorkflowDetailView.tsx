@@ -6,7 +6,8 @@ import type {
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { MarkDoneDialog } from '../components/MarkDoneDialog'
 import { TaskModal } from '../components/TaskModal'
-import { StatusPill } from '../components/Pills'
+import { WorkflowDialog } from '../components/WorkflowDialog'
+import { PriorityPill, StatusPill } from '../components/Pills'
 import { formatDate, isOverdue, todayIso } from '../lib/date'
 
 type Props = {
@@ -26,6 +27,7 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
   const [editing, setEditing]         = useState<Task | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<Task | null>(null)
   const [confirmDone, setConfirmDone]     = useState<Task | null>(null)
+  const [editWorkflowOpen, setEditWorkflowOpen] = useState(false)
 
   const [dragIndex, setDragIndex]         = useState<number | null>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
@@ -160,6 +162,8 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
             {instance.templateName ?? 'No template'}
             {instance.gateType   && ` · ${instance.gateType}`}
             {instance.projectRef && ` · ${instance.projectRef}`}
+            {instance.primaryOwner && ` · owner: ${instance.primaryOwner}`}
+            {instance.priority   && ` · ${instance.priority}`}
             {' · '}
             <span className={overdue ? 'overdue' : ''}>
               {instance.startDate ? formatDate(instance.startDate) : '—'}
@@ -167,6 +171,15 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
               {formatDate(instance.targetDate)}
             </span>
           </p>
+          <div style={{ marginTop: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <StatusPill status={instance.status} />
+            {instance.priority && <PriorityPill priority={instance.priority} />}
+            {instance.tags.length > 0 && (
+              <span className="muted compact">
+                {instance.tags.map(t => `#${t}`).join(' ')}
+              </span>
+            )}
+          </div>
         </div>
         <div className="header-actions">
           <div className="workflow-progress">
@@ -183,6 +196,7 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
               {instance.doneSteps}/{instance.totalSteps} steps
             </span>
           </div>
+          <button className="chip" onClick={() => setEditWorkflowOpen(true)}>Edit workflow</button>
         </div>
       </header>
 
@@ -294,6 +308,22 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
           taskTitle={confirmDone.title}
           onCancel={() => setConfirmDone(null)}
           onConfirm={(date, note) => markDone(confirmDone, date, note)}
+        />
+      )}
+
+      {editWorkflowOpen && instance && (
+        <WorkflowDialog
+          mode="edit"
+          instance={instance}
+          assignees={assignees}
+          tagSuggestions={tagSuggestions}
+          onCancel={() => setEditWorkflowOpen(false)}
+          onSubmit={async (patch) => {
+            const r = await window.frame.db.updateWorkflowInstance(instance.id, patch)
+            if (!r.ok) throw new Error(r.error ?? 'Update failed')
+            setEditWorkflowOpen(false)
+            await reload()
+          }}
         />
       )}
     </div>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import type { WorkflowInstance, WorkflowTemplate } from '../types'
+import type { Assignee, WorkflowInstance, WorkflowTemplate } from '../types'
 import { formatDate } from '../lib/date'
-import { NewWorkflowDialog } from '../components/NewWorkflowDialog'
+import { WorkflowDialog } from '../components/WorkflowDialog'
 import { WorkflowDetailView } from './WorkflowDetailView'
 
 export function WorkflowsView() {
@@ -15,6 +15,7 @@ export function WorkflowsView() {
 function WorkflowsList({ onSelect }: { onSelect: (id: number) => void }) {
   const [instances, setInstances] = useState<WorkflowInstance[]>([])
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([])
+  const [assignees, setAssignees] = useState<Assignee[]>([])
   const [tagSuggestions, setTagSuggestions] = useState<string[]>([])
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState<string | null>(null)
@@ -23,13 +24,15 @@ function WorkflowsList({ onSelect }: { onSelect: (id: number) => void }) {
   const reload = async () => {
     setError(null)
     try {
-      const [insts, tpls, tags] = await Promise.all([
+      const [insts, tpls, asn, tags] = await Promise.all([
         window.frame.db.listWorkflowInstances(),
         window.frame.db.listWorkflowTemplates(),
+        window.frame.db.listAssignees(),
         window.frame.db.listTags(),
       ])
       setInstances(insts)
       setTemplates(tpls)
+      setAssignees(asn)
       setTagSuggestions(tags)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -85,10 +88,11 @@ function WorkflowsList({ onSelect }: { onSelect: (id: number) => void }) {
                 <th>Name</th>
                 <th style={{ width: '5rem' }}>Gate</th>
                 <th style={{ width: '10rem' }}>Project</th>
-                <th style={{ width: '8rem' }}>Start</th>
+                <th style={{ width: '7rem' }}>Status</th>
+                <th style={{ width: '4rem' }}>Pri</th>
+                <th style={{ width: '8rem' }}>Owner</th>
                 <th style={{ width: '8rem' }}>Target</th>
-                <th style={{ width: '6rem' }}>Status</th>
-                <th style={{ width: '7rem', textAlign: 'right' }}>Progress</th>
+                <th style={{ width: '7rem' }}>Progress</th>
               </tr>
             </thead>
             <tbody>
@@ -98,12 +102,20 @@ function WorkflowsList({ onSelect }: { onSelect: (id: number) => void }) {
                   <td className="task-title-cell">{i.name}</td>
                   <td>{i.gateType ?? <span className="muted">—</span>}</td>
                   <td>{i.projectRef ?? <span className="muted">—</span>}</td>
-                  <td>{formatDate(i.startDate)}</td>
-                  <td>{formatDate(i.targetDate)}</td>
                   <td>{i.status}</td>
-                  <td style={{ textAlign: 'right' }}>
-                    {i.doneSteps}/{i.totalSteps}
-                    <span className="muted compact" style={{ marginLeft: '0.4rem' }}>({i.percentDone}%)</span>
+                  <td>{i.priority ?? <span className="muted">—</span>}</td>
+                  <td>{i.primaryOwner ?? <span className="muted">—</span>}</td>
+                  <td>{formatDate(i.targetDate)}</td>
+                  <td>
+                    <span className="percent-cell">
+                      <span className="percent-bar">
+                        <span
+                          className={`percent-bar-fill ${i.percentDone === 100 ? 'is-done' : ''}`}
+                          style={{ width: `${i.percentDone}%` }}
+                        />
+                      </span>
+                      <span className="percent-cell-num">{i.percentDone}</span>
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -113,8 +125,10 @@ function WorkflowsList({ onSelect }: { onSelect: (id: number) => void }) {
       )}
 
       {dialogOpen && (
-        <NewWorkflowDialog
+        <WorkflowDialog
+          mode="create"
           templates={templates}
+          assignees={assignees}
           tagSuggestions={tagSuggestions}
           onCancel={() => setDialogOpen(false)}
           onSubmit={handleCreate}

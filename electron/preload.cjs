@@ -36,6 +36,8 @@ try {
       listWorkflowInstances:  ()       => ipcRenderer.invoke('db:list-workflow-instances'),
       createWorkflowInstance: (input)  => ipcRenderer.invoke('db:create-workflow-instance', input),
       getWorkflowInstance:    (id)     => ipcRenderer.invoke('db:get-workflow-instance', id),
+      updateWorkflowInstance: (id, patch) =>
+        ipcRenderer.invoke('db:update-workflow-instance', id, patch),
       reorderWorkflowSteps:   (instanceId, orderedTaskIds) =>
         ipcRenderer.invoke('db:reorder-workflow-steps', instanceId, orderedTaskIds),
     },

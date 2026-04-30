@@ -99,7 +99,10 @@ export type WorkflowInstance = {
   projectRef:    string | null
   startDate:     string | null
   targetDate:    string | null
-  status:        string
+  status:        Status
+  priority:      Priority | null
+  primaryOwner:  string | null
+  assignees:     string[]
   notes:         string | null
   tags:          string[]
   totalSteps:    number
@@ -116,8 +119,26 @@ export type NewWorkflowInput = {
   projectRef?:       string | null
   startDate?:        string | null
   targetDate?:       string | null
+  status?:           Status
+  priority?:         Priority | null
+  primaryOwner?:     string | null
+  assignees?:        string[]
   tags?:             string[]
   applyTagsToSteps?: boolean
+}
+
+export type WorkflowPatch = {
+  name?:         string
+  gateType?:     string | null
+  projectRef?:   string | null
+  startDate?:    string | null
+  targetDate?:   string | null
+  status?:       Status
+  priority?:     Priority | null
+  primaryOwner?: string | null
+  assignees?:    string[]
+  tags?:         string[]
+  notes?:        string | null
 }
 
 export type WorkflowStep = {

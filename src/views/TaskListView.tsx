@@ -6,7 +6,7 @@ import type {
 import { ALL_PRIORITIES, ALL_STATUSES } from '../types'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { MarkDoneDialog } from '../components/MarkDoneDialog'
-import { NewWorkflowDialog } from '../components/NewWorkflowDialog'
+import { WorkflowDialog } from '../components/WorkflowDialog'
 import { TaskModal } from '../components/TaskModal'
 import { PriorityPill, StatusPill } from '../components/Pills'
 import { FilterDropdown } from '../components/FilterDropdown'
@@ -67,11 +67,17 @@ function isKnownStatus(s: string): s is Status {
   return (ALL_STATUSES as readonly string[]).includes(s)
 }
 
-// Filter pass for workflow rows. Priority / owner / tag don't apply
-// (workflows have none of these), so they always pass those dimensions.
+// Filter pass for workflow rows. Each dimension mirrors the task rule
+// when the workflow has the corresponding field; missing fields treat
+// the row as "(Unassigned)" / "(No tag)" — i.e. they pass unless the
+// user has explicitly excluded the unassigned key.
 function passesWorkflowFilters(i: WorkflowInstance, f: TaskFilters): boolean {
   if (isKnownStatus(i.status) && f.excludedStatuses.includes(i.status)) return false
   if (i.categoryId !== null && f.excludedCategoryIds.includes(i.categoryId)) return false
+  if (i.priority !== null && f.excludedPriorities.includes(i.priority)) return false
+  const ownerKey = i.primaryOwner ?? ''
+  if (f.excludedOwners.includes(ownerKey)) return false
+  if (f.excludedTags.length > 0 && i.tags.some(t => f.excludedTags.includes(t))) return false
   if (!isInDueRange(i.targetDate, isKnownStatus(i.status) ? i.status : 'WIP', f.dueRange)) return false
   return true
 }
@@ -468,6 +474,18 @@ export function TaskListView() {
     if (!r.ok && !r.cancelled) setError(r.error ?? 'Export failed')
   }
 
+  // Sets of IDs for parents and workflows that have something to expand
+  // (children matching the current filter, or any steps). Defined here,
+  // before any early return, so hook order stays stable across renders.
+  const expandableTaskIds = useMemo(
+    () => topRows.flatMap(r => r.kind === 'task' && (childrenByParent.get(r.task.id)?.length ?? 0) > 0 ? [r.task.id] : []),
+    [topRows, childrenByParent]
+  )
+  const expandableWorkflowIds = useMemo(
+    () => topRows.flatMap(r => r.kind === 'workflow' && (visibleStepsByWorkflowId.get(r.instance.id)?.length ?? 0) > 0 ? [r.instance.id] : []),
+    [topRows, visibleStepsByWorkflowId]
+  )
+
   if (loading) {
     return <div className="view-empty"><p className="muted">Loading…</p></div>
   }
@@ -483,17 +501,6 @@ export function TaskListView() {
     filters.dueRange                   !== 'all'
 
   const workflowCount = topRows.filter(r => r.kind === 'workflow').length
-
-  // Sets of IDs for parents and workflows that have something to expand
-  // (children matching the current filter, or any steps).
-  const expandableTaskIds = useMemo(
-    () => topRows.flatMap(r => r.kind === 'task' && (childrenByParent.get(r.task.id)?.length ?? 0) > 0 ? [r.task.id] : []),
-    [topRows, childrenByParent]
-  )
-  const expandableWorkflowIds = useMemo(
-    () => topRows.flatMap(r => r.kind === 'workflow' && (visibleStepsByWorkflowId.get(r.instance.id)?.length ?? 0) > 0 ? [r.instance.id] : []),
-    [topRows, visibleStepsByWorkflowId]
-  )
   const allExpanded =
     (expandableTaskIds.length === 0     || expandableTaskIds.every(id => expandedIds.has(id))) &&
     (expandableWorkflowIds.length === 0 || expandableWorkflowIds.every(id => expandedWorkflowIds.has(id))) &&
@@ -771,8 +778,10 @@ export function TaskListView() {
       )}
 
       {newWorkflowOpen && (
-        <NewWorkflowDialog
+        <WorkflowDialog
+          mode="create"
           templates={templates}
+          assignees={assignees}
           tagSuggestions={tagSuggestions}
           onCancel={() => setNewWorkflowOpen(false)}
           onSubmit={async (input) => {
@@ -843,11 +852,11 @@ function sortKeyForRow(
       case 'category': return i.categoryName ?? '~'
       case 'title':    return i.name
       case 'status':   return isKnownStatus(i.status) ? STATUS_SORT_INDEX[i.status] : '5'
-      case 'priority': return 'P9'
+      case 'priority': return i.priority ?? 'P9'
       case 'due':      return i.targetDate ?? '9999-99-99'
-      case 'owner':    return '~'
-      case 'team':     return -1
-      case 'tags':     return -1
+      case 'owner':    return i.primaryOwner ?? '~'
+      case 'team':     return i.assignees.length
+      case 'tags':     return i.tags.length
       case 'percent':  return i.percentDone
     }
   }
@@ -894,7 +903,11 @@ function groupKeyFor(
         sortKey: '9' + i.status,
       }
     }
-    return { key: 'o:none', label: '(Unassigned)', sortKey: 'zzz' }
+    return {
+      key:     i.primaryOwner ? `o:${i.primaryOwner}` : 'o:none',
+      label:   i.primaryOwner ?? '(Unassigned)',
+      sortKey: i.primaryOwner ? '0' + i.primaryOwner : 'zzz',
+    }
   }
   const t = r.task
   if (groupBy === 'category') {
@@ -1070,11 +1083,19 @@ function WorkflowRowGroup({
             <span className="percent-cell-num">{instance.percentDone}</span>
           </span>
         </td>
-        <td><span className="muted">—</span></td>
+        <td><PriorityPill priority={instance.priority} /></td>
         <td className={overdue ? 'overdue' : ''}>{formatDate(instance.targetDate)}</td>
-        <td><span className="muted">—</span></td>
-        <td><span className="muted">—</span></td>
-        <td><span className="muted">—</span></td>
+        <td>{instance.primaryOwner ?? <span className="muted">—</span>}</td>
+        <td>
+          {instance.assignees.length === 0
+            ? <span className="muted">—</span>
+            : <AssigneePile names={instance.assignees} />}
+        </td>
+        <td>
+          {instance.tags.length === 0
+            ? <span className="muted">—</span>
+            : <TagCellPile tags={instance.tags} />}
+        </td>
       </tr>
       {isExpanded && steps.map(s => (
         <TaskRow

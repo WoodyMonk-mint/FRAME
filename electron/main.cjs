@@ -221,6 +221,13 @@ function runSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_workflow_instance_tags_instance ON workflow_instance_tags(instance_id);
 
+    CREATE TABLE IF NOT EXISTS workflow_instance_assignees (
+      id          INTEGER PRIMARY KEY,
+      instance_id INTEGER NOT NULL REFERENCES workflow_instances(id) ON DELETE CASCADE,
+      name        TEXT NOT NULL REFERENCES assignees(name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_workflow_instance_assignees_instance ON workflow_instance_assignees(instance_id);
+
     CREATE TABLE IF NOT EXISTS task_assignees (
       id      INTEGER PRIMARY KEY,
       task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -400,6 +407,17 @@ function runMigrations() {
   if (!taskCols.includes('percent_manual')) {
     db.exec('ALTER TABLE tasks ADD COLUMN percent_manual INTEGER DEFAULT 0')
     console.log('[DB] Added percent_manual column to tasks')
+  }
+
+  // Iteration 3 Pass 4: workflows get priority + primary_owner + team
+  const wfCols = db.pragma('table_info(workflow_instances)').map(c => c.name)
+  if (!wfCols.includes('priority')) {
+    db.exec('ALTER TABLE workflow_instances ADD COLUMN priority TEXT')
+    console.log('[DB] Added priority column to workflow_instances')
+  }
+  if (!wfCols.includes('primary_owner')) {
+    db.exec('ALTER TABLE workflow_instances ADD COLUMN primary_owner TEXT')
+    console.log('[DB] Added primary_owner column to workflow_instances')
   }
 }
 
@@ -886,8 +904,13 @@ function registerIpcHandlers() {
     const tagRows = db.prepare(
       `SELECT instance_id, tag FROM workflow_instance_tags WHERE instance_id IN (${ph})`
     ).all(...ids)
+    const asnRows = db.prepare(
+      `SELECT instance_id, name FROM workflow_instance_assignees WHERE instance_id IN (${ph})`
+    ).all(...ids)
     const tagsByInstance = {}
+    const asnByInstance  = {}
     for (const r of tagRows) (tagsByInstance[r.instance_id] ??= []).push(r.tag)
+    for (const r of asnRows) (asnByInstance[r.instance_id]  ??= []).push(r.name)
     return rows.map(r => ({
       id:           r.id,
       templateId:   r.template_id,
@@ -900,6 +923,9 @@ function registerIpcHandlers() {
       startDate:    r.start_date,
       targetDate:   r.target_date,
       status:       r.status,
+      priority:     r.priority,
+      primaryOwner: r.primary_owner,
+      assignees:    asnByInstance[r.id] ?? [],
       notes:        r.notes,
       tags:         tagsByInstance[r.id] ?? [],
       totalSteps:   r.total_steps,
@@ -986,6 +1012,9 @@ function registerIpcHandlers() {
       const instTags = db.prepare(
         'SELECT tag FROM workflow_instance_tags WHERE instance_id = ?'
       ).all(id).map(r => r.tag)
+      const instAsns = db.prepare(
+        'SELECT name FROM workflow_instance_assignees WHERE instance_id = ?'
+      ).all(id).map(r => r.name)
 
       return {
         ok: true,
@@ -1001,6 +1030,9 @@ function registerIpcHandlers() {
           startDate:    inst.start_date,
           targetDate:   inst.target_date,
           status:       inst.status,
+          priority:     inst.priority,
+          primaryOwner: inst.primary_owner,
+          assignees:    instAsns,
           notes:        inst.notes,
           tags:         instTags,
           totalSteps:   steps.length,
@@ -1015,6 +1047,87 @@ function registerIpcHandlers() {
       }
     } catch (err) {
       console.error('[DB] get-workflow-instance failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:update-workflow-instance', (_event, id, patch) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const tx = db.transaction(() => {
+        const oldRow = db.prepare('SELECT * FROM workflow_instances WHERE id = ?').get(id)
+        if (!oldRow) throw new Error(`Workflow ${id} not found`)
+        const oldTags = db.prepare('SELECT tag  FROM workflow_instance_tags      WHERE instance_id = ?').all(id).map(r => r.tag)
+        const oldAsns = db.prepare('SELECT name FROM workflow_instance_assignees WHERE instance_id = ?').all(id).map(r => r.name)
+
+        const map = {
+          name:         'name',
+          gateType:     'gate_type',
+          projectRef:   'project_ref',
+          startDate:    'start_date',
+          targetDate:   'target_date',
+          status:       'status',
+          priority:     'priority',
+          primaryOwner: 'primary_owner',
+          notes:        'notes',
+        }
+        const setParts = []
+        const params = { id }
+        for (const [tsKey, sqlKey] of Object.entries(map)) {
+          if (Object.prototype.hasOwnProperty.call(patch, tsKey)) {
+            setParts.push(`${sqlKey} = @${tsKey}`)
+            params[tsKey] = patch[tsKey] ?? null
+          }
+        }
+        if (setParts.length > 0) {
+          setParts.push(`updated_at = datetime('now')`)
+          db.prepare(`UPDATE workflow_instances SET ${setParts.join(', ')} WHERE id = @id`).run(params)
+        }
+
+        let newAsns = oldAsns
+        if (Array.isArray(patch.assignees)) {
+          newAsns = [...new Set(patch.assignees.map(String).filter(Boolean))]
+          // Primary owner auto-joins the team: if the patched owner isn't already
+          // listed, add it. If the patch doesn't change the owner, fall back to
+          // the existing one for the same check.
+          const owner = Object.prototype.hasOwnProperty.call(patch, 'primaryOwner')
+            ? patch.primaryOwner
+            : oldRow.primary_owner
+          if (owner && !newAsns.includes(owner)) newAsns.push(owner)
+          db.prepare('DELETE FROM workflow_instance_assignees WHERE instance_id = ?').run(id)
+          const insA = db.prepare('INSERT INTO workflow_instance_assignees (instance_id, name) VALUES (?, ?)')
+          for (const n of newAsns) insA.run(id, n)
+        } else if (Object.prototype.hasOwnProperty.call(patch, 'primaryOwner')) {
+          // Owner changed without an explicit assignees rewrite: keep the team
+          // intact but make sure the new owner is on it.
+          if (patch.primaryOwner && !oldAsns.includes(patch.primaryOwner)) {
+            db.prepare('INSERT INTO workflow_instance_assignees (instance_id, name) VALUES (?, ?)').run(id, patch.primaryOwner)
+            newAsns = [...oldAsns, patch.primaryOwner]
+          }
+        }
+
+        let newTags = oldTags
+        if (Array.isArray(patch.tags)) {
+          newTags = [...new Set(patch.tags.map(t => String(t).trim()).filter(Boolean))]
+          db.prepare('DELETE FROM workflow_instance_tags WHERE instance_id = ?').run(id)
+          const insT = db.prepare('INSERT INTO workflow_instance_tags (instance_id, tag) VALUES (?, ?)')
+          for (const t of newTags) insT.run(id, t)
+        }
+
+        const newRow = db.prepare('SELECT * FROM workflow_instances WHERE id = ?').get(id)
+        db.prepare(`
+          INSERT INTO audit_log (table_name, row_id, action, changed_by, old_values, new_values)
+          VALUES ('workflow_instances', ?, 'UPDATE', 'user', ?, ?)
+        `).run(
+          id,
+          JSON.stringify({ ...oldRow, tags: oldTags, assignees: oldAsns }),
+          JSON.stringify({ ...newRow, tags: newTags, assignees: newAsns }),
+        )
+      })
+      tx()
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] update-workflow-instance failed:', err.message)
       return { ok: false, error: err.message }
     }
   })
@@ -1093,18 +1206,39 @@ function registerIpcHandlers() {
         if (!input.name || !String(input.name).trim()) throw new Error('Workflow name is required')
 
         const insIns = db.prepare(`
-          INSERT INTO workflow_instances (template_id, name, gate_type, project_ref, start_date, target_date, status)
-          VALUES (@templateId, @name, @gateType, @projectRef, @startDate, @targetDate, 'WIP')
+          INSERT INTO workflow_instances (
+            template_id, name, gate_type, project_ref,
+            start_date, target_date, status, priority, primary_owner
+          )
+          VALUES (
+            @templateId, @name, @gateType, @projectRef,
+            @startDate, @targetDate, COALESCE(@status, 'WIP'), @priority, @primaryOwner
+          )
         `)
         const r = insIns.run({
-          templateId:  tpl.id,
-          name:        String(input.name).trim(),
-          gateType:    input.gateType  ?? null,
-          projectRef:  input.projectRef ?? null,
-          startDate:   input.startDate ?? null,
-          targetDate:  input.targetDate ?? null,
+          templateId:   tpl.id,
+          name:         String(input.name).trim(),
+          gateType:     input.gateType  ?? null,
+          projectRef:   input.projectRef ?? null,
+          startDate:    input.startDate ?? null,
+          targetDate:   input.targetDate ?? null,
+          status:       input.status ?? null,
+          priority:     input.priority ?? null,
+          primaryOwner: input.primaryOwner ?? null,
         })
         newInstanceId = Number(r.lastInsertRowid)
+
+        // Team assignees, with primary owner auto-joining the team.
+        const cleanAssignees = Array.isArray(input.assignees)
+          ? [...new Set(input.assignees.map(String).filter(Boolean))]
+          : []
+        if (input.primaryOwner && !cleanAssignees.includes(input.primaryOwner)) {
+          cleanAssignees.push(input.primaryOwner)
+        }
+        if (cleanAssignees.length > 0) {
+          const insWfA = db.prepare('INSERT INTO workflow_instance_assignees (instance_id, name) VALUES (?, ?)')
+          for (const n of cleanAssignees) insWfA.run(newInstanceId, n)
+        }
 
         // Instance-level tags (always stored). Step propagation is opt-out.
         const cleanTags = Array.isArray(input.tags)

@@ -44,6 +44,8 @@ declare global {
       | { ok: true; instance: import('./types').WorkflowInstance; steps: import('./types').WorkflowStep[] }
       | { ok: false; error: string }
     >
+    updateWorkflowInstance: (id: number, patch: import('./types').WorkflowPatch) =>
+      Promise<{ ok: boolean; error?: string }>
     reorderWorkflowSteps:   (instanceId: number, orderedTaskIds: number[]) =>
       Promise<{ ok: boolean; error?: string }>
   }
