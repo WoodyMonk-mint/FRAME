@@ -19,3 +19,9 @@ export function effectivePercent(task: Task, children: Task[]): number {
   if (task.percentManual)   return task.percentComplete
   return computeAutoPercent(children)
 }
+
+// A parent can't be marked DONE while it has children in an active state.
+// Mirrors computeAutoPercent: CANCELLED children don't count as blockers.
+export function openSubtaskCount(children: Task[]): number {
+  return children.filter(c => c.status !== 'DONE' && c.status !== 'CANCELLED').length
+}

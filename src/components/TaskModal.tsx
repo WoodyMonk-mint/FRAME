@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { Assignee, Category, Priority, Status, Task, TaskInput } from '../types'
 import { ALL_PRIORITIES, ALL_STATUSES } from '../types'
 import { todayIso } from '../lib/date'
-import { computeAutoPercent } from '../lib/percent'
+import { computeAutoPercent, openSubtaskCount } from '../lib/percent'
 import { TagInput } from './TagInput'
 
 type Props = {
@@ -59,6 +59,8 @@ export function TaskModal({
   const hasChildren = childCount > 0
   const autoValue   = hasChildren ? computeAutoPercent(autoChildren) : 0
   const sliderEnabled = !hasChildren || percentManual
+  const openChildren  = hasChildren ? openSubtaskCount(autoChildren) : 0
+  const blockedFromDone = status === 'DONE' && openChildren > 0
 
   // Auto-bump % to 100 when marked done; auto-zero when moved back to planning (add only).
   useEffect(() => {
@@ -81,6 +83,10 @@ export function TaskModal({
     e.preventDefault()
     setError(null)
     if (!title.trim()) { setError('Title is required.'); return }
+    if (blockedFromDone) {
+      setError(`Can't mark Done — ${openChildren} subtask${openChildren === 1 ? '' : 's'} still open. Finish or cancel them first.`)
+      return
+    }
 
     setSaving(true)
     try {
@@ -272,12 +278,14 @@ export function TaskModal({
             <button type="button" className="chip" onClick={onCancel} disabled={saving}>
               Cancel
             </button>
-            <button type="submit" className="primary-button" disabled={saving}>
+            <button type="submit" className="primary-button" disabled={saving || blockedFromDone}>
               {saving ? 'Saving…' : (mode === 'add' ? (parent ? 'Add subtask' : 'Add task') : 'Save')}
             </button>
           </div>
           <p className="muted compact" style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
-            {status === 'DONE' && task?.status !== 'DONE' && `Will set completed date to ${todayIso()}.`}
+            {blockedFromDone
+              ? `Can't mark Done — ${openChildren} subtask${openChildren === 1 ? '' : 's'} still open.`
+              : status === 'DONE' && task?.status !== 'DONE' && `Will set completed date to ${todayIso()}.`}
           </p>
         </form>
       </div>

@@ -10,7 +10,7 @@ import { SingleSelectDropdown } from '../components/SingleSelectDropdown'
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import type { DueRange } from '../lib/date'
 import { formatDate, isOverdue, todayIso } from '../lib/date'
-import { effectivePercent } from '../lib/percent'
+import { effectivePercent, openSubtaskCount } from '../lib/percent'
 import { tasksToCsv } from '../lib/csv'
 import type { SortColumn, TaskFilters, TaskFilterPreset } from '../lib/taskFilters'
 import {
@@ -643,10 +643,18 @@ export function TaskListView() {
         const t       = ctxMenu.task
         const isDone  = t.status === 'DONE'
         const canSub  = t.parentTaskId === null
+        const openCount = openSubtaskCount(allChildrenByParent.get(t.id) ?? [])
+        const blockedFromDone = !isDone && openCount > 0
+        const markLabel = isDone
+          ? 'Mark not done'
+          : blockedFromDone
+            ? `Mark done (${openCount} open subtask${openCount === 1 ? '' : 's'})`
+            : 'Mark done'
         const items: ContextMenuItem[] = [
           { kind: 'item', label: 'Open',        onSelect: () => setModal({ kind: 'edit', task: t }) },
           { kind: 'item', label: 'Add subtask', onSelect: () => setModal({ kind: 'add-subtask', parent: t }), disabled: !canSub },
-          { kind: 'item', label: isDone ? 'Mark not done' : 'Mark done',
+          { kind: 'item', label: markLabel,
+            disabled: blockedFromDone,
             onSelect: () => isDone ? undone(t) : markDone(t) },
           { kind: 'divider' },
           { kind: 'item', label: 'Delete…', danger: true, onSelect: () => setConfirmDelete(t) },
@@ -709,6 +717,8 @@ function RowGroup({
   const hasChildren = children.length > 0
   const displayPercent = effectivePercent(task, children)
   const isAuto = hasChildren && !task.percentManual
+  const openCount = openSubtaskCount(children)
+  const blockedFromDone = openCount > 0 && task.status !== 'DONE'
 
   return (
     <>
@@ -725,6 +735,8 @@ function RowGroup({
         onContextMenu={(x, y) => onContextMenu(task, x, y)}
         displayPercent={displayPercent}
         percentMode={hasChildren ? (task.percentManual ? 'manual' : 'auto') : 'leaf'}
+        blockedFromDone={blockedFromDone}
+        blockedReason={blockedFromDone ? `${openCount} open subtask${openCount === 1 ? '' : 's'}` : null}
       />
       {isExpanded && children.map(c => (
         <TaskRow
@@ -741,6 +753,8 @@ function RowGroup({
           onContextMenu={(x, y) => onContextMenu(c, x, y)}
           displayPercent={c.percentComplete}
           percentMode="leaf"
+          blockedFromDone={false}
+          blockedReason={null}
         />
       ))}
       {isExpanded && (
@@ -765,20 +779,22 @@ function RowGroup({
 function TaskRow({
   task, depth, canExpand, isExpanded, onToggle,
   categoryColour, onOpen, onMarkDone, onUndone, onContextMenu,
-  displayPercent, percentMode,
+  displayPercent, percentMode, blockedFromDone, blockedReason,
 }: {
-  task:           Task
-  depth:          number
-  canExpand:      boolean
-  isExpanded:     boolean
-  onToggle:       () => void
-  categoryColour: string | null
-  onOpen:         () => void
-  onMarkDone:     () => void
-  onUndone:       () => void
-  onContextMenu:  (x: number, y: number) => void
-  displayPercent: number
-  percentMode:    'auto' | 'manual' | 'leaf'
+  task:            Task
+  depth:           number
+  canExpand:       boolean
+  isExpanded:      boolean
+  onToggle:        () => void
+  categoryColour:  string | null
+  onOpen:          () => void
+  onMarkDone:      () => void
+  onUndone:        () => void
+  onContextMenu:   (x: number, y: number) => void
+  displayPercent:  number
+  percentMode:     'auto' | 'manual' | 'leaf'
+  blockedFromDone: boolean
+  blockedReason:   string | null
 }) {
   const overdue = isOverdue(task.dueDate, task.status)
   const isDone  = task.status === 'DONE'
@@ -795,8 +811,15 @@ function TaskRow({
           type="checkbox"
           className="task-checkbox"
           checked={isDone}
+          disabled={blockedFromDone}
           onChange={() => isDone ? onUndone() : onMarkDone()}
-          title={isDone ? 'Mark not done' : 'Mark done'}
+          title={
+            isDone
+              ? 'Mark not done'
+              : blockedFromDone
+                ? `Cannot mark done — ${blockedReason}`
+                : 'Mark done'
+          }
         />
       </td>
       <td>

@@ -757,6 +757,21 @@ function registerIpcHandlers() {
         if (!oldRow) throw new Error(`Task ${id} not found`)
         const oldAssignees = db.prepare('SELECT name FROM task_assignees WHERE task_id = ?').all(id).map(r => r.name)
 
+        // Parents can't move to DONE while any child is still active
+        // (CANCELLED children don't block, matching the auto-percent rule).
+        if (patch.status === 'DONE' && oldRow.status !== 'DONE') {
+          const openCount = db.prepare(`
+            SELECT COUNT(*) AS n
+            FROM tasks
+            WHERE parent_task_id = ?
+              AND status NOT IN ('DONE','CANCELLED')
+              AND is_deleted = 0
+          `).get(id).n
+          if (openCount > 0) {
+            throw new Error(`Can't mark Done — ${openCount} open subtask${openCount === 1 ? '' : 's'} remaining.`)
+          }
+        }
+
         const setParts = []
         const params = { id }
         const map = {
