@@ -6326,3 +6326,64 @@ kbd {
   font-size: 0.84rem;
   border-radius: 12px;
 }
+
+/* ── Iteration 2.x: Saved-views filter bar (PRISM-style dropdowns) ── */
+
+.filter-bar-dropdowns {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.6rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Anchor dropdowns to the left (their parent button) since our filter bar
+   reads left-to-right. PRISM's portfolio uses right alignment because its
+   dropdowns sit at the right edge of the header. */
+.filter-bar-dropdowns .dash-filter-dropdown {
+  right: auto;
+  left: 0;
+  min-width: 14rem;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+/* The inner option labels for our checkbox lists. */
+.dash-filter-dropdown .dash-filter-option:hover,
+.dash-filter-dropdown .dash-filter-option.active {
+  background: rgba(99, 102, 241, 0.10);
+}
+
+/* Rename pencil button on saved-view rows */
+.dash-view-row-rename {
+  flex-shrink: 0;
+  padding: 3px 5px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.72rem;
+  border-radius: 4px;
+  opacity: 0.4;
+  color: var(--muted);
+}
+.dash-view-row-rename:hover { opacity: 1; color: #a5b4fc; }
+
+.dash-view-rename-input {
+  flex: 1;
+  margin: 0 4px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 0.8rem;
+  background: var(--bg);
+  border: 1px solid rgba(99, 102, 241, 0.5);
+  border-radius: 4px;
+  color: var(--text);
+}
+.dash-view-rename-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25);
+}
+
+/* The previous chip-row filter panel is no longer rendered. Keeping its
+   styles around for now; the container just doesn't appear. */

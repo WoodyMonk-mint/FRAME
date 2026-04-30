@@ -1,21 +1,28 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import type { Assignee, Category, Priority, Status, Task, TaskInput } from '../types'
+import type { Assignee, Category, Status, Task, TaskInput } from '../types'
 import { ALL_PRIORITIES, ALL_STATUSES } from '../types'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { TaskModal } from '../components/TaskModal'
 import { PriorityPill, StatusPill } from '../components/Pills'
+import { FilterDropdown } from '../components/FilterDropdown'
+import { SavedViewsDropdown } from '../components/SavedViewsDropdown'
 import type { DueRange } from '../lib/date'
-import { formatDate, isInDueRange, isOverdue, todayIso } from '../lib/date'
+import { formatDate, isOverdue, todayIso } from '../lib/date'
 import { effectivePercent } from '../lib/percent'
 import { tasksToCsv } from '../lib/csv'
+import type { TaskFilters, TaskFilterPreset } from '../lib/taskFilters'
+import {
+  DEFAULT_FILTERS,
+  passesFilters,
+  loadPresets, savePresets,
+  getDefaultPresetId, setDefaultPresetId,
+} from '../lib/taskFilters'
 
 type ModalState =
   | { kind: 'closed' }
   | { kind: 'add' }
   | { kind: 'edit'; task: Task }
   | { kind: 'add-subtask'; parent: Task }
-
-const DEFAULT_VISIBLE: Set<Status> = new Set(['PLANNING', 'WIP', 'BLOCKED', 'ON_HOLD'])
 
 const STATUS_LABEL: Record<Status, string> = {
   PLANNING:  'Planning',
@@ -32,6 +39,16 @@ const STATUS_SORT_INDEX: Record<Status, string> = {
 
 type GroupBy = 'none' | 'category' | 'status' | 'owner'
 
+const DUE_RANGE_OPTIONS: Array<{ value: DueRange; label: string }> = [
+  { value: 'all',       label: 'All' },
+  { value: 'overdue',   label: 'Overdue' },
+  { value: 'today',     label: 'Today' },
+  { value: 'this-week', label: 'This week' },
+  { value: 'no-date',   label: 'No date' },
+]
+
+const UNASSIGNED_KEY = ''
+
 export function TaskListView() {
   const [tasks, setTasks]           = useState<Task[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -39,21 +56,21 @@ export function TaskListView() {
   const [tagSuggestions, setTagSuggestions] = useState<string[]>([])
   const [loading, setLoading]       = useState(true)
   const [error, setError]           = useState<string | null>(null)
-  const [visibleStatuses, setVisibleStatuses] = useState<Set<Status>>(DEFAULT_VISIBLE)
+
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
 
-  // Iteration 2 / Phase 3: full filter set
-  const [filtersOpen, setFiltersOpen]           = useState(false)
-  const [filterCategoryIds, setFilterCategoryIds] = useState<Set<number>>(new Set())
-  const [filterPriorities, setFilterPriorities]   = useState<Set<Priority>>(new Set())
-  const [filterOwners, setFilterOwners]           = useState<Set<string>>(new Set())
-  const [filterDueRange, setFilterDueRange]       = useState<DueRange>('all')
-  const [filterTags, setFilterTags]               = useState<Set<string>>(new Set())
+  // Filter model: a single TaskFilters object plus saved-view machinery.
+  const [filters, setFiltersState] = useState<TaskFilters>(DEFAULT_FILTERS)
+  const [presets, setPresets]                = useState<TaskFilterPreset[]>([])
+  const [activePresetId, setActivePresetId]  = useState<string | null>(null)
+  const [defaultPresetId, setDefaultIdState] = useState<string | null>(null)
+  const [openDropdown, setOpenDropdown]      = useState<string | null>(null)
 
-  // Iteration 2 / Phase 4: grouping
+  // Grouping
   const [groupBy, setGroupBy]                 = useState<GroupBy>('none')
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
-  const [modal, setModal]           = useState<ModalState>({ kind: 'closed' })
+
+  const [modal, setModal]                 = useState<ModalState>({ kind: 'closed' })
   const [confirmDelete, setConfirmDelete] = useState<Task | null>(null)
 
   const reload = async () => {
@@ -76,8 +93,20 @@ export function TaskListView() {
     }
   }
 
+  // Initial load: data + presets + default preset application.
   useEffect(() => {
     let cancelled = false
+    const initialPresets = loadPresets()
+    const initialDefault = getDefaultPresetId()
+    if (!cancelled) {
+      setPresets(initialPresets)
+      setDefaultIdState(initialDefault)
+      const def = initialDefault ? initialPresets.find(p => p.id === initialDefault) : null
+      if (def) {
+        setFiltersState(def.filters)
+        setActivePresetId(def.id)
+      }
+    }
     void (async () => {
       try {
         const [t, c, a, tg] = await Promise.all([
@@ -101,19 +130,75 @@ export function TaskListView() {
     return () => { cancelled = true }
   }, [])
 
-  // The single filter predicate, applied to both top-level and children.
-  const passesFilters = (t: Task): boolean => {
-    if (!visibleStatuses.has(t.status)) return false
-    if (filterCategoryIds.size > 0 && (t.categoryId === null || !filterCategoryIds.has(t.categoryId))) return false
-    if (filterPriorities.size > 0 && (t.priority === null || !filterPriorities.has(t.priority))) return false
-    if (filterOwners.size > 0 && (t.primaryOwner === null || !filterOwners.has(t.primaryOwner))) return false
-    if (!isInDueRange(t.dueDate, t.status, filterDueRange)) return false
-    if (filterTags.size > 0 && !t.tags.some(tag => filterTags.has(tag))) return false
-    return true
+  // Manual filter mutations clear the active preset id (the user has diverged
+  // from the named view). Preset applies use setFiltersState directly.
+  const updateFilters = (patch: Partial<TaskFilters>) => {
+    setFiltersState(prev => ({ ...prev, ...patch }))
+    setActivePresetId(null)
   }
 
-  // Auto children (unfiltered) — for the modal's auto-% calculation, we want
-  // every child regardless of filters so the displayed value is consistent.
+  const toggleExcluded = <K extends keyof TaskFilters>(key: K, value: TaskFilters[K] extends Array<infer V> ? V : never) => {
+    const arr = filters[key] as unknown as unknown[]
+    const next = arr.includes(value) ? arr.filter(v => v !== value) : [...arr, value]
+    updateFilters({ [key]: next as unknown } as Partial<TaskFilters>)
+  }
+
+  const showAll = <K extends keyof TaskFilters>(key: K) => {
+    updateFilters({ [key]: [] as unknown } as Partial<TaskFilters>)
+  }
+
+  const clearAllFilters = () => {
+    setFiltersState(DEFAULT_FILTERS)
+    setActivePresetId(null)
+  }
+
+  // ─── Saved-view actions ──────────────────────────────────────────────────
+
+  const persistPresets = (next: TaskFilterPreset[]) => {
+    setPresets(next)
+    savePresets(next)
+  }
+
+  const applyPreset = (preset: TaskFilterPreset) => {
+    setFiltersState(preset.filters)
+    setActivePresetId(preset.id)
+    setOpenDropdown(null)
+  }
+
+  const saveCurrentAsPreset = (name: string) => {
+    const existing = presets.find(p => p.name === name)
+    const next: TaskFilterPreset = {
+      id:      existing?.id ?? `tf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      name,
+      filters,
+    }
+    const updated = existing
+      ? presets.map(p => p.id === existing.id ? next : p)
+      : [...presets, next]
+    persistPresets(updated)
+    setActivePresetId(next.id)
+  }
+
+  const renamePreset = (id: string, name: string) => {
+    persistPresets(presets.map(p => p.id === id ? { ...p, name } : p))
+  }
+
+  const deletePreset = (id: string) => {
+    persistPresets(presets.filter(p => p.id !== id))
+    if (activePresetId === id) setActivePresetId(null)
+    if (defaultPresetId === id) {
+      setDefaultIdState(null)
+      setDefaultPresetId(null)
+    }
+  }
+
+  const setDefaultPreset = (id: string | null) => {
+    setDefaultIdState(id)
+    setDefaultPresetId(id)
+  }
+
+  // ─── Derived data ────────────────────────────────────────────────────────
+
   const allChildrenByParent = useMemo(() => {
     const m = new Map<number, Task[]>()
     for (const t of tasks) {
@@ -126,24 +211,21 @@ export function TaskListView() {
     return m
   }, [tasks])
 
-  // Filtered children for table rendering.
   const childrenByParent = useMemo(() => {
     const m = new Map<number, Task[]>()
     for (const t of tasks) {
-      if (t.parentTaskId !== null && passesFilters(t)) {
+      if (t.parentTaskId !== null && passesFilters(t, filters)) {
         const arr = m.get(t.parentTaskId) ?? []
         arr.push(t)
         m.set(t.parentTaskId, arr)
       }
     }
     return m
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks, visibleStatuses, filterCategoryIds, filterPriorities, filterOwners, filterDueRange, filterTags])
+  }, [tasks, filters])
 
   const visibleTopLevel = useMemo(
-    () => tasks.filter(t => t.parentTaskId === null && passesFilters(t)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tasks, visibleStatuses, filterCategoryIds, filterPriorities, filterOwners, filterDueRange, filterTags]
+    () => tasks.filter(t => t.parentTaskId === null && passesFilters(t, filters)),
+    [tasks, filters]
   )
 
   const totalTopLevel = useMemo(
@@ -151,37 +233,20 @@ export function TaskListView() {
     [tasks]
   )
 
+  // Owner option set: union of seeded assignees and any owner already on a task,
+  // plus a sentinel "(Unassigned)" entry so the user can hide unowned tasks.
   const ownerOptions = useMemo(() => {
     const set = new Set<string>()
     for (const a of assignees) set.add(a.name)
     for (const t of tasks) if (t.primaryOwner) set.add(t.primaryOwner)
-    return [...set].sort()
+    const ordered = [...set].sort()
+    return [
+      ...ordered.map(name => ({ value: name, label: name })),
+      { value: UNASSIGNED_KEY, label: '(Unassigned)' },
+    ]
   }, [assignees, tasks])
 
-  const activeFilterCount = useMemo(() => {
-    let n = 0
-    if (filterCategoryIds.size > 0) n++
-    if (filterPriorities.size > 0)  n++
-    if (filterOwners.size > 0)      n++
-    if (filterDueRange !== 'all')   n++
-    if (filterTags.size > 0)        n++
-    return n
-  }, [filterCategoryIds, filterPriorities, filterOwners, filterDueRange, filterTags])
-
-  const clearFilters = () => {
-    setFilterCategoryIds(new Set())
-    setFilterPriorities(new Set())
-    setFilterOwners(new Set())
-    setFilterDueRange('all')
-    setFilterTags(new Set())
-  }
-
-  const toggleInSet = <T,>(set: Set<T>, value: T): Set<T> => {
-    const next = new Set(set)
-    if (next.has(value)) next.delete(value)
-    else next.add(value)
-    return next
-  }
+  // ─── Grouping ────────────────────────────────────────────────────────────
 
   const groups = useMemo(() => {
     if (groupBy === 'none') {
@@ -223,15 +288,6 @@ export function TaskListView() {
     })
   }
 
-  const toggleStatus = (s: Status) => {
-    setVisibleStatuses(prev => {
-      const next = new Set(prev)
-      if (next.has(s)) next.delete(s)
-      else next.add(s)
-      return next
-    })
-  }
-
   const toggleExpand = (id: number) => {
     setExpandedIds(prev => {
       const next = new Set(prev)
@@ -240,6 +296,8 @@ export function TaskListView() {
       return next
     })
   }
+
+  // ─── Task mutations ──────────────────────────────────────────────────────
 
   const saveTask = async (input: TaskInput, opts: { setCompletedToToday: boolean }) => {
     if (modal.kind === 'add') {
@@ -266,32 +324,20 @@ export function TaskListView() {
       completedDate:   todayIso(),
       percentComplete: 100,
     })
-    if (!r.ok) {
-      setError(r.error ?? 'Update failed')
-      return
-    }
+    if (!r.ok) { setError(r.error ?? 'Update failed'); return }
     await reload()
   }
 
   const undone = async (task: Task) => {
-    const r = await window.frame.db.updateTask(task.id, {
-      status:        'WIP',
-      completedDate: null,
-    })
-    if (!r.ok) {
-      setError(r.error ?? 'Update failed')
-      return
-    }
+    const r = await window.frame.db.updateTask(task.id, { status: 'WIP', completedDate: null })
+    if (!r.ok) { setError(r.error ?? 'Update failed'); return }
     await reload()
   }
 
   const doDelete = async (task: Task) => {
     setConfirmDelete(null)
     const r = await window.frame.db.softDeleteTask(task.id)
-    if (!r.ok) {
-      setError(r.error ?? 'Delete failed')
-      return
-    }
+    if (!r.ok) { setError(r.error ?? 'Delete failed'); return }
     setModal({ kind: 'closed' })
     await reload()
   }
@@ -311,14 +357,22 @@ export function TaskListView() {
     }
     const csv = tasksToCsv(flat)
     const r = await window.frame.app.saveCsv(csv, `frame-tasks-${todayIso()}.csv`)
-    if (!r.ok && !r.cancelled) {
-      setError(r.error ?? 'Export failed')
-    }
+    if (!r.ok && !r.cancelled) setError(r.error ?? 'Export failed')
   }
 
   if (loading) {
     return <div className="view-empty"><p className="muted">Loading…</p></div>
   }
+
+  // ─── Render ──────────────────────────────────────────────────────────────
+
+  const hasAnyExclusions =
+    filters.excludedStatuses.length    > 0 ||
+    filters.excludedCategoryIds.length > 0 ||
+    filters.excludedPriorities.length  > 0 ||
+    filters.excludedOwners.length      > 0 ||
+    filters.excludedTags.length        > 0 ||
+    filters.dueRange                   !== 'all'
 
   return (
     <div className="task-view">
@@ -328,30 +382,105 @@ export function TaskListView() {
           <p className="muted compact">{visibleTopLevel.length} of {totalTopLevel} task{totalTopLevel === 1 ? '' : 's'}</p>
         </div>
         <div className="header-actions">
-          <button className="chip" onClick={exportCsv}>
-            Export CSV
-          </button>
-          <button className="primary-button" onClick={() => setModal({ kind: 'add' })}>
-            + Add task
-          </button>
+          <button className="chip" onClick={exportCsv}>Export CSV</button>
+          <button className="primary-button" onClick={() => setModal({ kind: 'add' })}>+ Add task</button>
         </div>
       </header>
 
       {error && <div className="setup-error" style={{ margin: '1rem 2rem 0' }}>{error}</div>}
 
-      <div className="filter-bar">
-        <span className="filter-label muted">Status</span>
-        {ALL_STATUSES.map(s => (
-          <button
-            key={s}
-            className={`chip ${visibleStatuses.has(s) ? 'active' : ''}`}
-            onClick={() => toggleStatus(s)}
+      <div className="filter-bar filter-bar-dropdowns" onClick={() => setOpenDropdown(null)}>
+        <SavedViewsDropdown
+          presets={presets}
+          activeId={activePresetId}
+          defaultId={defaultPresetId}
+          isOpen={openDropdown === 'saved'}
+          onOpen={() => setOpenDropdown('saved')}
+          onClose={() => setOpenDropdown(null)}
+          onApply={applyPreset}
+          onClearActive={() => { setFiltersState(DEFAULT_FILTERS); setActivePresetId(null) }}
+          onSaveCurrent={saveCurrentAsPreset}
+          onRename={renamePreset}
+          onDelete={deletePreset}
+          onSetDefault={setDefaultPreset}
+        />
+
+        <FilterDropdown
+          label="Status"
+          options={ALL_STATUSES.map(s => ({ value: s, label: STATUS_LABEL[s] }))}
+          excluded={filters.excludedStatuses}
+          isOpen={openDropdown === 'status'}
+          onOpen={() => setOpenDropdown('status')}
+          onClose={() => setOpenDropdown(null)}
+          onToggle={(v) => toggleExcluded('excludedStatuses', v as Status)}
+          onShowAll={() => showAll('excludedStatuses')}
+        />
+
+        <FilterDropdown
+          label="Category"
+          options={categories.filter(c => !c.isArchived).map(c => ({ value: String(c.id), label: c.name }))}
+          excluded={filters.excludedCategoryIds.map(String)}
+          isOpen={openDropdown === 'category'}
+          onOpen={() => setOpenDropdown('category')}
+          onClose={() => setOpenDropdown(null)}
+          onToggle={(v) => toggleExcluded('excludedCategoryIds', Number(v))}
+          onShowAll={() => showAll('excludedCategoryIds')}
+        />
+
+        <FilterDropdown
+          label="Priority"
+          options={ALL_PRIORITIES.map(p => ({ value: p, label: p }))}
+          excluded={filters.excludedPriorities}
+          isOpen={openDropdown === 'priority'}
+          onOpen={() => setOpenDropdown('priority')}
+          onClose={() => setOpenDropdown(null)}
+          onToggle={(v) => toggleExcluded('excludedPriorities', v as typeof filters.excludedPriorities[number])}
+          onShowAll={() => showAll('excludedPriorities')}
+        />
+
+        <FilterDropdown
+          label="Owner"
+          options={ownerOptions}
+          excluded={filters.excludedOwners}
+          isOpen={openDropdown === 'owner'}
+          onOpen={() => setOpenDropdown('owner')}
+          onClose={() => setOpenDropdown(null)}
+          onToggle={(v) => toggleExcluded('excludedOwners', v)}
+          onShowAll={() => showAll('excludedOwners')}
+        />
+
+        <label className="group-by-control" onClick={e => e.stopPropagation()}>
+          <span className="muted compact">Due:</span>
+          <select
+            value={filters.dueRange}
+            onChange={e => updateFilters({ dueRange: e.target.value as DueRange })}
           >
-            {STATUS_LABEL[s]}
+            {DUE_RANGE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </label>
+
+        {tagSuggestions.length > 0 && (
+          <FilterDropdown
+            label="Tag"
+            options={tagSuggestions.map(t => ({ value: t, label: t }))}
+            excluded={filters.excludedTags}
+            isOpen={openDropdown === 'tag'}
+            onOpen={() => setOpenDropdown('tag')}
+            onClose={() => setOpenDropdown(null)}
+            onToggle={(v) => toggleExcluded('excludedTags', v)}
+            onShowAll={() => showAll('excludedTags')}
+          />
+        )}
+
+        {hasAnyExclusions && (
+          <button type="button" className="dash-filter-clear-all" onClick={clearAllFilters}>
+            Clear all
           </button>
-        ))}
+        )}
+
         <div className="filter-bar-spacer" />
-        <label className="group-by-control">
+
+        <label className="group-by-control" onClick={e => e.stopPropagation()}>
           <span className="muted compact">Group:</span>
           <select value={groupBy} onChange={e => setGroupBy(e.target.value as GroupBy)}>
             <option value="none">None</option>
@@ -360,101 +489,7 @@ export function TaskListView() {
             <option value="owner">Owner</option>
           </select>
         </label>
-        <button
-          type="button"
-          className={`chip filter-toggle-chip ${activeFilterCount > 0 ? 'active' : ''}`}
-          onClick={() => setFiltersOpen(o => !o)}
-        >
-          {filtersOpen ? 'Hide filters ▴' : `Filters${activeFilterCount > 0 ? ` (${activeFilterCount})` : ''} ▾`}
-        </button>
-        {activeFilterCount > 0 && (
-          <button type="button" className="chip" onClick={clearFilters}>
-            Clear
-          </button>
-        )}
       </div>
-
-      {filtersOpen && (
-        <div className="filter-panel">
-          <div className="filter-row">
-            <span className="filter-row-label">Category</span>
-            <div className="chip-row">
-              {categories.filter(c => !c.isArchived).map(c => (
-                <button
-                  type="button"
-                  key={c.id}
-                  className={`chip ${filterCategoryIds.has(c.id) ? 'active' : ''}`}
-                  onClick={() => setFilterCategoryIds(s => toggleInSet(s, c.id))}
-                >{c.name}</button>
-              ))}
-            </div>
-          </div>
-
-          <div className="filter-row">
-            <span className="filter-row-label">Priority</span>
-            <div className="chip-row">
-              {ALL_PRIORITIES.map(p => (
-                <button
-                  type="button"
-                  key={p}
-                  className={`chip ${filterPriorities.has(p) ? 'active' : ''}`}
-                  onClick={() => setFilterPriorities(s => toggleInSet(s, p))}
-                >{p}</button>
-              ))}
-            </div>
-          </div>
-
-          <div className="filter-row">
-            <span className="filter-row-label">Owner</span>
-            <div className="chip-row">
-              {ownerOptions.map(name => (
-                <button
-                  type="button"
-                  key={name}
-                  className={`chip ${filterOwners.has(name) ? 'active' : ''}`}
-                  onClick={() => setFilterOwners(s => toggleInSet(s, name))}
-                >{name}</button>
-              ))}
-            </div>
-          </div>
-
-          <div className="filter-row">
-            <span className="filter-row-label">Due</span>
-            <div className="chip-row">
-              {([
-                ['all',       'All'],
-                ['overdue',   'Overdue'],
-                ['today',     'Today'],
-                ['this-week', 'This week'],
-                ['no-date',   'No date'],
-              ] as Array<[DueRange, string]>).map(([v, label]) => (
-                <button
-                  type="button"
-                  key={v}
-                  className={`chip ${filterDueRange === v ? 'active' : ''}`}
-                  onClick={() => setFilterDueRange(v)}
-                >{label}</button>
-              ))}
-            </div>
-          </div>
-
-          {tagSuggestions.length > 0 && (
-            <div className="filter-row">
-              <span className="filter-row-label">Tag</span>
-              <div className="chip-row">
-                {tagSuggestions.map(tag => (
-                  <button
-                    type="button"
-                    key={tag}
-                    className={`chip ${filterTags.has(tag) ? 'active' : ''}`}
-                    onClick={() => setFilterTags(s => toggleInSet(s, tag))}
-                  >{tag}</button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
 
       {visibleTopLevel.length === 0 ? (
         <div className="view-empty">
