@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { Assignee, Category, Status, Task, TaskInput } from '../types'
-import { ALL_STATUSES } from '../types'
+import type { Assignee, Category, Priority, Status, Task, TaskInput } from '../types'
+import { ALL_PRIORITIES, ALL_STATUSES } from '../types'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { TaskModal } from '../components/TaskModal'
 import { PriorityPill, StatusPill } from '../components/Pills'
-import { formatDate, isOverdue, todayIso } from '../lib/date'
+import type { DueRange } from '../lib/date'
+import { formatDate, isInDueRange, isOverdue, todayIso } from '../lib/date'
 import { effectivePercent } from '../lib/percent'
 
 type ModalState =
@@ -33,6 +34,14 @@ export function TaskListView() {
   const [error, setError]           = useState<string | null>(null)
   const [visibleStatuses, setVisibleStatuses] = useState<Set<Status>>(DEFAULT_VISIBLE)
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
+
+  // Iteration 2 / Phase 3: full filter set
+  const [filtersOpen, setFiltersOpen]           = useState(false)
+  const [filterCategoryIds, setFilterCategoryIds] = useState<Set<number>>(new Set())
+  const [filterPriorities, setFilterPriorities]   = useState<Set<Priority>>(new Set())
+  const [filterOwners, setFilterOwners]           = useState<Set<string>>(new Set())
+  const [filterDueRange, setFilterDueRange]       = useState<DueRange>('all')
+  const [filterTags, setFilterTags]               = useState<Set<string>>(new Set())
   const [modal, setModal]           = useState<ModalState>({ kind: 'closed' })
   const [confirmDelete, setConfirmDelete] = useState<Task | null>(null)
 
@@ -81,9 +90,20 @@ export function TaskListView() {
     return () => { cancelled = true }
   }, [])
 
-  // Group children by parent. Children are visible when their parent is expanded —
-  // status filter applies to top-level tasks; children always render under their parent.
-  const childrenByParent = useMemo(() => {
+  // The single filter predicate, applied to both top-level and children.
+  const passesFilters = (t: Task): boolean => {
+    if (!visibleStatuses.has(t.status)) return false
+    if (filterCategoryIds.size > 0 && (t.categoryId === null || !filterCategoryIds.has(t.categoryId))) return false
+    if (filterPriorities.size > 0 && (t.priority === null || !filterPriorities.has(t.priority))) return false
+    if (filterOwners.size > 0 && (t.primaryOwner === null || !filterOwners.has(t.primaryOwner))) return false
+    if (!isInDueRange(t.dueDate, t.status, filterDueRange)) return false
+    if (filterTags.size > 0 && !t.tags.some(tag => filterTags.has(tag))) return false
+    return true
+  }
+
+  // Auto children (unfiltered) — for the modal's auto-% calculation, we want
+  // every child regardless of filters so the displayed value is consistent.
+  const allChildrenByParent = useMemo(() => {
     const m = new Map<number, Task[]>()
     for (const t of tasks) {
       if (t.parentTaskId !== null) {
@@ -95,15 +115,62 @@ export function TaskListView() {
     return m
   }, [tasks])
 
+  // Filtered children for table rendering.
+  const childrenByParent = useMemo(() => {
+    const m = new Map<number, Task[]>()
+    for (const t of tasks) {
+      if (t.parentTaskId !== null && passesFilters(t)) {
+        const arr = m.get(t.parentTaskId) ?? []
+        arr.push(t)
+        m.set(t.parentTaskId, arr)
+      }
+    }
+    return m
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks, visibleStatuses, filterCategoryIds, filterPriorities, filterOwners, filterDueRange, filterTags])
+
   const visibleTopLevel = useMemo(
-    () => tasks.filter(t => t.parentTaskId === null && visibleStatuses.has(t.status)),
-    [tasks, visibleStatuses]
+    () => tasks.filter(t => t.parentTaskId === null && passesFilters(t)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tasks, visibleStatuses, filterCategoryIds, filterPriorities, filterOwners, filterDueRange, filterTags]
   )
 
   const totalTopLevel = useMemo(
     () => tasks.filter(t => t.parentTaskId === null).length,
     [tasks]
   )
+
+  const ownerOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const a of assignees) set.add(a.name)
+    for (const t of tasks) if (t.primaryOwner) set.add(t.primaryOwner)
+    return [...set].sort()
+  }, [assignees, tasks])
+
+  const activeFilterCount = useMemo(() => {
+    let n = 0
+    if (filterCategoryIds.size > 0) n++
+    if (filterPriorities.size > 0)  n++
+    if (filterOwners.size > 0)      n++
+    if (filterDueRange !== 'all')   n++
+    if (filterTags.size > 0)        n++
+    return n
+  }, [filterCategoryIds, filterPriorities, filterOwners, filterDueRange, filterTags])
+
+  const clearFilters = () => {
+    setFilterCategoryIds(new Set())
+    setFilterPriorities(new Set())
+    setFilterOwners(new Set())
+    setFilterDueRange('all')
+    setFilterTags(new Set())
+  }
+
+  const toggleInSet = <T,>(set: Set<T>, value: T): Set<T> => {
+    const next = new Set(set)
+    if (next.has(value)) next.delete(value)
+    else next.add(value)
+    return next
+  }
 
   const toggleStatus = (s: Status) => {
     setVisibleStatuses(prev => {
@@ -207,7 +274,102 @@ export function TaskListView() {
             {STATUS_LABEL[s]}
           </button>
         ))}
+        <div className="filter-bar-spacer" />
+        <button
+          type="button"
+          className={`chip filter-toggle-chip ${activeFilterCount > 0 ? 'active' : ''}`}
+          onClick={() => setFiltersOpen(o => !o)}
+        >
+          {filtersOpen ? 'Hide filters ▴' : `Filters${activeFilterCount > 0 ? ` (${activeFilterCount})` : ''} ▾`}
+        </button>
+        {activeFilterCount > 0 && (
+          <button type="button" className="chip" onClick={clearFilters}>
+            Clear
+          </button>
+        )}
       </div>
+
+      {filtersOpen && (
+        <div className="filter-panel">
+          <div className="filter-row">
+            <span className="filter-row-label">Category</span>
+            <div className="chip-row">
+              {categories.filter(c => !c.isArchived).map(c => (
+                <button
+                  type="button"
+                  key={c.id}
+                  className={`chip ${filterCategoryIds.has(c.id) ? 'active' : ''}`}
+                  onClick={() => setFilterCategoryIds(s => toggleInSet(s, c.id))}
+                >{c.name}</button>
+              ))}
+            </div>
+          </div>
+
+          <div className="filter-row">
+            <span className="filter-row-label">Priority</span>
+            <div className="chip-row">
+              {ALL_PRIORITIES.map(p => (
+                <button
+                  type="button"
+                  key={p}
+                  className={`chip ${filterPriorities.has(p) ? 'active' : ''}`}
+                  onClick={() => setFilterPriorities(s => toggleInSet(s, p))}
+                >{p}</button>
+              ))}
+            </div>
+          </div>
+
+          <div className="filter-row">
+            <span className="filter-row-label">Owner</span>
+            <div className="chip-row">
+              {ownerOptions.map(name => (
+                <button
+                  type="button"
+                  key={name}
+                  className={`chip ${filterOwners.has(name) ? 'active' : ''}`}
+                  onClick={() => setFilterOwners(s => toggleInSet(s, name))}
+                >{name}</button>
+              ))}
+            </div>
+          </div>
+
+          <div className="filter-row">
+            <span className="filter-row-label">Due</span>
+            <div className="chip-row">
+              {([
+                ['all',       'All'],
+                ['overdue',   'Overdue'],
+                ['today',     'Today'],
+                ['this-week', 'This week'],
+                ['no-date',   'No date'],
+              ] as Array<[DueRange, string]>).map(([v, label]) => (
+                <button
+                  type="button"
+                  key={v}
+                  className={`chip ${filterDueRange === v ? 'active' : ''}`}
+                  onClick={() => setFilterDueRange(v)}
+                >{label}</button>
+              ))}
+            </div>
+          </div>
+
+          {tagSuggestions.length > 0 && (
+            <div className="filter-row">
+              <span className="filter-row-label">Tag</span>
+              <div className="chip-row">
+                {tagSuggestions.map(tag => (
+                  <button
+                    type="button"
+                    key={tag}
+                    className={`chip ${filterTags.has(tag) ? 'active' : ''}`}
+                    onClick={() => setFilterTags(s => toggleInSet(s, tag))}
+                  >{tag}</button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {visibleTopLevel.length === 0 ? (
         <div className="view-empty">
@@ -263,8 +425,8 @@ export function TaskListView() {
           mode={modal.kind === 'edit' ? 'edit' : 'add'}
           task={modal.kind === 'edit' ? modal.task : undefined}
           parent={modal.kind === 'add-subtask' ? modal.parent : undefined}
-          childCount={modal.kind === 'edit' ? (childrenByParent.get(modal.task.id)?.length ?? 0) : 0}
-          autoChildren={modal.kind === 'edit' ? (childrenByParent.get(modal.task.id) ?? []) : []}
+          childCount={modal.kind === 'edit' ? (allChildrenByParent.get(modal.task.id)?.length ?? 0) : 0}
+          autoChildren={modal.kind === 'edit' ? (allChildrenByParent.get(modal.task.id) ?? []) : []}
           categories={categories}
           assignees={assignees}
           tagSuggestions={tagSuggestions}
