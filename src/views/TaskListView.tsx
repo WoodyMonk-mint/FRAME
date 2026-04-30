@@ -10,7 +10,7 @@ import type { DueRange } from '../lib/date'
 import { formatDate, isOverdue, todayIso } from '../lib/date'
 import { effectivePercent } from '../lib/percent'
 import { tasksToCsv } from '../lib/csv'
-import type { TaskFilters, TaskFilterPreset } from '../lib/taskFilters'
+import type { SortColumn, TaskFilters, TaskFilterPreset } from '../lib/taskFilters'
 import {
   DEFAULT_FILTERS,
   passesFilters,
@@ -224,9 +224,45 @@ export function TaskListView() {
   }, [tasks, filters])
 
   const visibleTopLevel = useMemo(
-    () => tasks.filter(t => t.parentTaskId === null && passesFilters(t, filters)),
-    [tasks, filters]
+    () => {
+      const base = tasks.filter(t => t.parentTaskId === null && passesFilters(t, filters))
+      if (!filters.sortBy || !filters.sortDir) return base
+      const sorted = [...base]
+      const col = filters.sortBy
+      sorted.sort((a, b) => {
+        let cmp = 0
+        switch (col) {
+          case 'category': cmp = (a.categoryName ?? '~').localeCompare(b.categoryName ?? '~'); break
+          case 'title':    cmp = a.title.localeCompare(b.title); break
+          case 'status':   cmp = STATUS_SORT_INDEX[a.status].localeCompare(STATUS_SORT_INDEX[b.status]); break
+          case 'priority': cmp = (a.priority ?? 'P9').localeCompare(b.priority ?? 'P9'); break
+          case 'due':      cmp = (a.dueDate ?? '9999-99-99').localeCompare(b.dueDate ?? '9999-99-99'); break
+          case 'owner':    cmp = (a.primaryOwner ?? '~').localeCompare(b.primaryOwner ?? '~'); break
+          case 'team':     cmp = a.assignees.length - b.assignees.length; break
+          case 'tags':     cmp = a.tags.length - b.tags.length; break
+          case 'percent': {
+            const ap = effectivePercent(a, allChildrenByParent.get(a.id) ?? [])
+            const bp = effectivePercent(b, allChildrenByParent.get(b.id) ?? [])
+            cmp = ap - bp
+            break
+          }
+        }
+        return filters.sortDir === 'desc' ? -cmp : cmp
+      })
+      return sorted
+    },
+    [tasks, filters, allChildrenByParent]
   )
+
+  // Click-to-cycle: unsorted → asc → desc → unsorted (back to IPC default order).
+  const cycleSort = (col: NonNullable<SortColumn>) => {
+    setFiltersState(prev => {
+      if (prev.sortBy !== col) return { ...prev, sortBy: col, sortDir: 'asc' }
+      if (prev.sortDir === 'asc') return { ...prev, sortDir: 'desc' }
+      return { ...prev, sortBy: null, sortDir: null }
+    })
+    setActivePresetId(null)
+  }
 
   const totalTopLevel = useMemo(
     () => tasks.filter(t => t.parentTaskId === null).length,
@@ -505,15 +541,15 @@ export function TaskListView() {
             <thead>
               <tr>
                 <th aria-label="Done" style={{ width: '2.25rem' }}></th>
-                <th style={{ width: '11rem' }}>Category</th>
-                <th>Title</th>
-                <th style={{ width: '7rem' }}>Status</th>
-                <th style={{ width: '4rem' }}>Pri</th>
-                <th style={{ width: '8rem' }}>Due</th>
-                <th style={{ width: '8rem' }}>Owner</th>
-                <th style={{ width: '9rem' }}>Team</th>
-                <th style={{ width: '11rem' }}>Tags</th>
-                <th style={{ width: '5.5rem', textAlign: 'right' }}>%</th>
+                <SortTh col="category" sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="11rem">Category</SortTh>
+                <SortTh col="title"    sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort}>Title</SortTh>
+                <SortTh col="status"   sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="7rem">Status</SortTh>
+                <SortTh col="priority" sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="4rem">Pri</SortTh>
+                <SortTh col="due"      sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="8rem">Due</SortTh>
+                <SortTh col="owner"    sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="8rem">Owner</SortTh>
+                <SortTh col="team"     sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="9rem">Team</SortTh>
+                <SortTh col="tags"     sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="11rem">Tags</SortTh>
+                <SortTh col="percent"  sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="5.5rem" align="right">%</SortTh>
               </tr>
             </thead>
             <tbody>
@@ -585,6 +621,33 @@ export function TaskListView() {
         />
       )}
     </div>
+  )
+}
+
+function SortTh({
+  col, sortBy, sortDir, onClick, width, align = 'left', children,
+}: {
+  col:      NonNullable<SortColumn>
+  sortBy:   SortColumn
+  sortDir:  TaskFilters['sortDir']
+  onClick:  (col: NonNullable<SortColumn>) => void
+  width?:   string
+  align?:   'left' | 'right'
+  children: React.ReactNode
+}) {
+  const sorted = sortBy === col
+  const arrow  = sorted ? (sortDir === 'asc' ? '▲' : '▼') : ''
+  return (
+    <th
+      className={`sortable-th${sorted ? ' is-sorted' : ''}`}
+      style={{ width, textAlign: align, cursor: 'pointer' }}
+      onClick={() => onClick(col)}
+    >
+      <span className="sortable-th-inner">
+        {children}
+        {arrow && <span className="sort-indicator">{arrow}</span>}
+      </span>
+    </th>
   )
 }
 

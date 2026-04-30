@@ -6387,3 +6387,28 @@ kbd {
 
 /* The previous chip-row filter panel is no longer rendered. Keeping its
    styles around for now; the container just doesn't appear. */
+
+/* ── Iteration 2.x: Sortable column headers ─────────────────────── */
+
+.task-table thead th.sortable-th {
+  user-select: none;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.task-table thead th.sortable-th:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.025);
+}
+.task-table thead th.sortable-th.is-sorted {
+  color: var(--text);
+}
+.sortable-th-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.sort-indicator {
+  font-size: 0.6rem;
+  color: var(--indigo);
+  letter-spacing: 0;
+}

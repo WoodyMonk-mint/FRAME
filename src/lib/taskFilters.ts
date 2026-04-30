@@ -6,6 +6,12 @@ import { isInDueRange } from './date'
 // "show all"; values listed in the exclusion set are hidden. Status defaults
 // to hiding DONE / CANCELLED so the open queue is the natural starting view.
 
+export type SortColumn =
+  | 'category' | 'title' | 'status' | 'priority' | 'due' | 'owner' | 'team' | 'tags' | 'percent'
+  | null
+
+export type SortDir = 'asc' | 'desc' | null
+
 export type TaskFilters = {
   excludedStatuses:    Status[]
   excludedCategoryIds: number[]
@@ -13,6 +19,8 @@ export type TaskFilters = {
   excludedOwners:      string[]    // assignee names; '' means "(Unassigned)"
   excludedTags:        string[]
   dueRange:            DueRange
+  sortBy:              SortColumn
+  sortDir:             SortDir
 }
 
 export const DEFAULT_FILTERS: TaskFilters = {
@@ -22,6 +30,14 @@ export const DEFAULT_FILTERS: TaskFilters = {
   excludedOwners:      [],
   excludedTags:        [],
   dueRange:            'all',
+  sortBy:              null,
+  sortDir:             null,
+}
+
+// Older presets in localStorage may pre-date the sort fields; backfill them
+// rather than leaving undefined values that break the predicate.
+export function withDefaults(f: Partial<TaskFilters>): TaskFilters {
+  return { ...DEFAULT_FILTERS, ...f }
 }
 
 export type TaskFilterPreset = {
@@ -38,7 +54,9 @@ export function loadPresets(): TaskFilterPreset[] {
     const raw = localStorage.getItem(STORAGE_PRESETS_KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed : []
+    if (!Array.isArray(parsed)) return []
+    // Backfill any missing fields on older saved presets.
+    return parsed.map((p: TaskFilterPreset) => ({ ...p, filters: withDefaults(p.filters ?? {}) }))
   } catch { return [] }
 }
 
