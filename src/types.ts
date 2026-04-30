@@ -116,3 +116,19 @@ export type NewWorkflowInput = {
   startDate?:  string | null
   targetDate?: string | null
 }
+
+export type WorkflowStep = {
+  stepId:             number
+  stepNumber:         number
+  templateStepId:     number | null
+  templateStepNumber: number | null
+  templateTitle:      string | null
+  isDeviation:        boolean
+  deviationReason:    string | null
+  task:               Task | null
+}
+
+export type WorkflowInstanceDetail = {
+  instance: WorkflowInstance
+  steps:    WorkflowStep[]
+}

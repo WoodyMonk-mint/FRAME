@@ -35,6 +35,9 @@ try {
       listWorkflowTemplates:  ()       => ipcRenderer.invoke('db:list-workflow-templates'),
       listWorkflowInstances:  ()       => ipcRenderer.invoke('db:list-workflow-instances'),
       createWorkflowInstance: (input)  => ipcRenderer.invoke('db:create-workflow-instance', input),
+      getWorkflowInstance:    (id)     => ipcRenderer.invoke('db:get-workflow-instance', id),
+      reorderWorkflowSteps:   (instanceId, orderedTaskIds) =>
+        ipcRenderer.invoke('db:reorder-workflow-steps', instanceId, orderedTaskIds),
     },
   })
   console.log('[preload] window.frame exposed OK')

@@ -894,6 +894,167 @@ function registerIpcHandlers() {
     }))
   })
 
+  ipcMain.handle('db:get-workflow-instance', (_event, id) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const inst = db.prepare(`
+        SELECT i.*, t.name AS template_name, t.category_id AS template_category_id,
+          c.name AS template_category_name
+        FROM workflow_instances i
+        LEFT JOIN workflow_templates t ON t.id = i.template_id
+        LEFT JOIN categories c ON c.id = t.category_id
+        WHERE i.id = ?
+      `).get(id)
+      if (!inst) throw new Error(`Workflow ${id} not found`)
+
+      const stepRows = db.prepare(`
+        SELECT s.id AS step_id, s.step_number, s.is_deviation, s.deviation_reason,
+               s.template_step_id, ts.step_number AS template_step_number, ts.title AS template_title,
+               t.id AS task_id, t.title, t.status, t.priority, t.primary_owner,
+               t.due_date, t.completed_date, t.percent_complete, t.percent_manual,
+               t.notes, t.description, t.category_id, c.name AS category_name,
+               t.workflow_instance_id, t.parent_task_id,
+               t.created_at, t.updated_at, t.type
+        FROM workflow_instance_steps s
+        LEFT JOIN tasks t                ON t.id  = s.task_id
+        LEFT JOIN workflow_template_steps ts ON ts.id = s.template_step_id
+        LEFT JOIN categories c           ON c.id = t.category_id
+        WHERE s.instance_id = ? AND (t.is_deleted IS NULL OR t.is_deleted = 0)
+        ORDER BY s.step_number
+      `).all(id)
+
+      const taskIds = stepRows.map(r => r.task_id).filter(Boolean)
+      const assigneesByTask = {}
+      const tagsByTask = {}
+      if (taskIds.length > 0) {
+        const ph = taskIds.map(() => '?').join(',')
+        const aRows = db.prepare(`SELECT task_id, name FROM task_assignees WHERE task_id IN (${ph})`).all(...taskIds)
+        const tRows = db.prepare(`SELECT task_id, tag  FROM task_tags      WHERE task_id IN (${ph})`).all(...taskIds)
+        for (const a of aRows) (assigneesByTask[a.task_id] ??= []).push(a.name)
+        for (const t of tRows) (tagsByTask[t.task_id]      ??= []).push(t.tag)
+      }
+
+      const steps = stepRows.map(r => ({
+        stepId:             r.step_id,
+        stepNumber:         r.step_number,
+        templateStepId:     r.template_step_id,
+        templateStepNumber: r.template_step_number,
+        templateTitle:      r.template_title,
+        isDeviation:        !!r.is_deviation,
+        deviationReason:    r.deviation_reason,
+        task: r.task_id ? {
+          id:                  r.task_id,
+          type:                r.type,
+          categoryId:          r.category_id,
+          categoryName:        r.category_name ?? null,
+          parentTaskId:        r.parent_task_id ?? null,
+          workflowInstanceId:  r.workflow_instance_id ?? null,
+          workflowStepNumber:  r.step_number,
+          title:               r.title,
+          description:         r.description,
+          status:              r.status,
+          priority:            r.priority,
+          primaryOwner:        r.primary_owner,
+          assignees:           assigneesByTask[r.task_id] ?? [],
+          tags:                tagsByTask[r.task_id] ?? [],
+          dueDate:             r.due_date,
+          completedDate:       r.completed_date,
+          percentComplete:     r.percent_complete ?? 0,
+          percentManual:       !!r.percent_manual,
+          notes:               r.notes,
+          createdAt:           r.created_at,
+          updatedAt:           r.updated_at,
+        } : null,
+      }))
+
+      return {
+        ok: true,
+        instance: {
+          id:           inst.id,
+          templateId:   inst.template_id,
+          templateName: inst.template_name,
+          categoryId:   inst.template_category_id,
+          categoryName: inst.template_category_name,
+          name:         inst.name,
+          gateType:     inst.gate_type,
+          projectRef:   inst.project_ref,
+          startDate:    inst.start_date,
+          targetDate:   inst.target_date,
+          status:       inst.status,
+          notes:        inst.notes,
+          totalSteps:   steps.length,
+          doneSteps:    steps.filter(s => s.task && s.task.status === 'DONE').length,
+          percentDone:  steps.length > 0
+            ? Math.round((steps.filter(s => s.task && s.task.status === 'DONE').length / steps.length) * 100)
+            : 0,
+          createdAt:    inst.created_at,
+          updatedAt:    inst.updated_at,
+        },
+        steps,
+      }
+    } catch (err) {
+      console.error('[DB] get-workflow-instance failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:reorder-workflow-steps', (_event, instanceId, orderedTaskIds) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const tx = db.transaction(() => {
+        const stepRows = db.prepare(`
+          SELECT s.id, s.task_id, s.template_step_id, ts.step_number AS template_step_number
+          FROM workflow_instance_steps s
+          LEFT JOIN workflow_template_steps ts ON ts.id = s.template_step_id
+          WHERE s.instance_id = ?
+        `).all(instanceId)
+        if (stepRows.length === 0) throw new Error(`Workflow ${instanceId} has no steps`)
+        if (stepRows.length !== orderedTaskIds.length) {
+          throw new Error(`Expected ${stepRows.length} task IDs, got ${orderedTaskIds.length}`)
+        }
+        const byTaskId = new Map(stepRows.map(r => [r.task_id, r]))
+        for (const tid of orderedTaskIds) {
+          if (!byTaskId.has(tid)) throw new Error(`Task ${tid} is not part of workflow ${instanceId}`)
+        }
+
+        const updStep = db.prepare(`
+          UPDATE workflow_instance_steps
+          SET step_number = ?, is_deviation = ?
+          WHERE id = ?
+        `)
+        const updTask = db.prepare(`
+          UPDATE tasks SET updated_at = datetime('now') WHERE id = ?
+        `)
+        orderedTaskIds.forEach((tid, idx) => {
+          const newStepNumber = idx + 1
+          const row = byTaskId.get(tid)
+          // A reorder counts as a deviation only if we have a template baseline
+          // to compare against. Ad-hoc steps (no template_step_id) keep
+          // is_deviation as-is — they were already deviations from creation.
+          let isDev = 0
+          if (row.template_step_number != null) {
+            isDev = newStepNumber !== row.template_step_number ? 1 : 0
+          } else {
+            isDev = 1
+          }
+          updStep.run(newStepNumber, isDev, row.id)
+          updTask.run(tid)
+        })
+
+        db.prepare(`UPDATE workflow_instances SET updated_at = datetime('now') WHERE id = ?`).run(instanceId)
+        db.prepare(`
+          INSERT INTO audit_log (table_name, row_id, action, changed_by, new_values)
+          VALUES ('workflow_instances', ?, 'REORDER', 'user', ?)
+        `).run(instanceId, JSON.stringify({ orderedTaskIds }))
+      })
+      tx()
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] reorder-workflow-steps failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
   ipcMain.handle('db:create-workflow-instance', (_event, input) => {
     if (!db) return { ok: false, error: 'Database not ready' }
     try {

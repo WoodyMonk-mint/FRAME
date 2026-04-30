@@ -40,6 +40,12 @@ declare global {
     listWorkflowInstances:  () => Promise<import('./types').WorkflowInstance[]>
     createWorkflowInstance: (input: import('./types').NewWorkflowInput) =>
       Promise<{ ok: boolean; instanceId?: number; error?: string }>
+    getWorkflowInstance:    (id: number) => Promise<
+      | { ok: true; instance: import('./types').WorkflowInstance; steps: import('./types').WorkflowStep[] }
+      | { ok: false; error: string }
+    >
+    reorderWorkflowSteps:   (instanceId: number, orderedTaskIds: number[]) =>
+      Promise<{ ok: boolean; error?: string }>
   }
 
   interface FrameAppApi {

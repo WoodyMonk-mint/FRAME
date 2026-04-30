@@ -2,8 +2,17 @@ import { useEffect, useState } from 'react'
 import type { WorkflowInstance, WorkflowTemplate } from '../types'
 import { formatDate } from '../lib/date'
 import { NewWorkflowDialog } from '../components/NewWorkflowDialog'
+import { WorkflowDetailView } from './WorkflowDetailView'
 
 export function WorkflowsView() {
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  if (selectedId !== null) {
+    return <WorkflowDetailView instanceId={selectedId} onBack={() => setSelectedId(null)} />
+  }
+  return <WorkflowsList onSelect={setSelectedId} />
+}
+
+function WorkflowsList({ onSelect }: { onSelect: (id: number) => void }) {
   const [instances, setInstances] = useState<WorkflowInstance[]>([])
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([])
   const [loading, setLoading]     = useState(true)
@@ -81,7 +90,7 @@ export function WorkflowsView() {
             </thead>
             <tbody>
               {instances.map(i => (
-                <tr key={i.id} className="task-row">
+                <tr key={i.id} className="task-row" onClick={() => onSelect(i.id)} style={{ cursor: 'pointer' }}>
                   <td>{i.templateName ?? <span className="muted">—</span>}</td>
                   <td className="task-title-cell">{i.name}</td>
                   <td>{i.gateType ?? <span className="muted">—</span>}</td>

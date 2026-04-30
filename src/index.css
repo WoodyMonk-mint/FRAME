@@ -6178,6 +6178,37 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
+.workflow-step-row {
+  cursor: pointer;
+  transition: background 0.1s, opacity 0.1s;
+}
+.workflow-step-row-dragging td {
+  opacity: 0.4;
+}
+.workflow-step-row-drag-over td {
+  border-top: 2px solid rgba(99, 102, 241, 0.85) !important;
+}
+.workflow-drag-handle {
+  cursor: grab;
+  user-select: none;
+  color: var(--muted);
+  text-align: center;
+  letter-spacing: -1px;
+  font-weight: 700;
+}
+.workflow-drag-handle:hover { color: var(--text); }
+.workflow-drag-handle:active { cursor: grabbing; }
+
+.workflow-deviation-flag {
+  color: #fcd34d;
+  cursor: help;
+}
+
+.workflow-progress {
+  display: inline-flex;
+  align-items: center;
+}
+
 .task-row-subtask td {
   background: rgba(255, 255, 255, 0.012);
   font-size: 0.825rem;
