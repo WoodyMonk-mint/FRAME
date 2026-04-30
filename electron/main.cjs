@@ -47,6 +47,42 @@ function setupPaths(chosenDbPath) {
   backupsDir = path.join(path.dirname(chosenDbPath), 'backups')
 }
 
+// ─── Task helpers ─────────────────────────────────────────────────────────────
+
+function taskRowToObject(r, assignees) {
+  return {
+    id:               r.id,
+    type:             r.type,
+    categoryId:       r.category_id,
+    categoryName:     r.category_name ?? null,
+    title:            r.title,
+    description:      r.description,
+    status:           r.status,
+    priority:         r.priority,
+    primaryOwner:     r.primary_owner,
+    assignees:        assignees ?? [],
+    dueDate:          r.due_date,
+    completedDate:    r.completed_date,
+    percentComplete:  r.percent_complete ?? 0,
+    notes:            r.notes,
+    createdAt:        r.created_at,
+    updatedAt:        r.updated_at,
+  }
+}
+
+function getTaskById(id) {
+  if (!db) return null
+  const r = db.prepare(`
+    SELECT t.*, c.name AS category_name
+    FROM tasks t
+    LEFT JOIN categories c ON t.category_id = c.id
+    WHERE t.id = ? AND t.is_deleted = 0
+  `).get(id)
+  if (!r) return null
+  const assignees = db.prepare('SELECT name FROM task_assignees WHERE task_id = ?').all(id).map(x => x.name)
+  return taskRowToObject(r, assignees)
+}
+
 // ─── Backup ───────────────────────────────────────────────────────────────────
 
 function createSessionBackup() {
@@ -547,6 +583,194 @@ function registerIpcHandlers() {
           dbStatusError = recoverErr.message
         }
       }
+      return { ok: false, error: err.message }
+    }
+  })
+
+  // ── Tasks (Iteration 1) ────────────────────────────────────────────────────
+
+  ipcMain.handle('db:list-categories', () => {
+    if (!db) return []
+    return db.prepare(`
+      SELECT id, name, sort_order, colour, is_archived
+      FROM categories
+      ORDER BY COALESCE(sort_order, 999), name
+    `).all().map(r => ({
+      id:         r.id,
+      name:       r.name,
+      sortOrder:  r.sort_order,
+      colour:     r.colour,
+      isArchived: !!r.is_archived,
+    }))
+  })
+
+  ipcMain.handle('db:list-assignees', () => {
+    if (!db) return []
+    return db.prepare(`
+      SELECT id, name, is_active, sort_order
+      FROM assignees
+      WHERE is_active = 1
+      ORDER BY COALESCE(sort_order, 999), name
+    `).all().map(r => ({
+      id:        r.id,
+      name:      r.name,
+      isActive:  !!r.is_active,
+      sortOrder: r.sort_order,
+    }))
+  })
+
+  ipcMain.handle('db:list-tasks', () => {
+    if (!db) return []
+    const rows = db.prepare(`
+      SELECT t.*, c.name AS category_name
+      FROM tasks t
+      LEFT JOIN categories c ON t.category_id = c.id
+      WHERE t.is_deleted = 0
+      ORDER BY
+        CASE t.priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 ELSE 4 END,
+        t.due_date IS NULL,
+        t.due_date,
+        t.created_at DESC
+    `).all()
+
+    if (rows.length === 0) return []
+
+    const ids = rows.map(r => r.id)
+    const placeholders = ids.map(() => '?').join(',')
+    const assigneeRows = db.prepare(
+      `SELECT task_id, name FROM task_assignees WHERE task_id IN (${placeholders})`
+    ).all(...ids)
+
+    const assigneesByTaskId = {}
+    for (const a of assigneeRows) {
+      if (!assigneesByTaskId[a.task_id]) assigneesByTaskId[a.task_id] = []
+      assigneesByTaskId[a.task_id].push(a.name)
+    }
+
+    return rows.map(r => taskRowToObject(r, assigneesByTaskId[r.id] ?? []))
+  })
+
+  ipcMain.handle('db:create-task', (_event, input) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      let newId
+      const tx = db.transaction(() => {
+        const ins = db.prepare(`
+          INSERT INTO tasks (
+            type, category_id, title, description, status, priority,
+            primary_owner, due_date, percent_complete, notes
+          ) VALUES (
+            'one-off', @categoryId, @title, @description, @status, @priority,
+            @primaryOwner, @dueDate, @percentComplete, @notes
+          )
+        `)
+        const result = ins.run({
+          categoryId:      input.categoryId ?? null,
+          title:           input.title,
+          description:     input.description ?? null,
+          status:          input.status ?? 'PLANNING',
+          priority:        input.priority ?? null,
+          primaryOwner:    input.primaryOwner ?? null,
+          dueDate:         input.dueDate ?? null,
+          percentComplete: input.percentComplete ?? 0,
+          notes:           input.notes ?? null,
+        })
+        newId = Number(result.lastInsertRowid)
+
+        if (Array.isArray(input.assignees) && input.assignees.length) {
+          const insA = db.prepare('INSERT INTO task_assignees (task_id, name) VALUES (?, ?)')
+          for (const name of input.assignees) insA.run(newId, name)
+        }
+
+        const newRow = db.prepare('SELECT * FROM tasks WHERE id = ?').get(newId)
+        db.prepare(`
+          INSERT INTO audit_log (table_name, row_id, action, changed_by, new_values)
+          VALUES ('tasks', ?, 'INSERT', 'user', ?)
+        `).run(newId, JSON.stringify({ ...newRow, assignees: input.assignees ?? [] }))
+      })
+      tx()
+      return { ok: true, task: getTaskById(newId) }
+    } catch (err) {
+      console.error('[DB] create-task failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:update-task', (_event, id, patch) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const tx = db.transaction(() => {
+        const oldRow = db.prepare('SELECT * FROM tasks WHERE id = ? AND is_deleted = 0').get(id)
+        if (!oldRow) throw new Error(`Task ${id} not found`)
+        const oldAssignees = db.prepare('SELECT name FROM task_assignees WHERE task_id = ?').all(id).map(r => r.name)
+
+        const setParts = []
+        const params = { id }
+        const map = {
+          title:           'title',
+          categoryId:      'category_id',
+          primaryOwner:    'primary_owner',
+          status:          'status',
+          priority:        'priority',
+          dueDate:         'due_date',
+          percentComplete: 'percent_complete',
+          description:     'description',
+          notes:           'notes',
+          completedDate:   'completed_date',
+        }
+        for (const [tsKey, sqlKey] of Object.entries(map)) {
+          if (Object.prototype.hasOwnProperty.call(patch, tsKey)) {
+            setParts.push(`${sqlKey} = @${tsKey}`)
+            params[tsKey] = patch[tsKey] ?? null
+          }
+        }
+        setParts.push(`updated_at = datetime('now')`)
+        db.prepare(`UPDATE tasks SET ${setParts.join(', ')} WHERE id = @id`).run(params)
+
+        if (Array.isArray(patch.assignees)) {
+          db.prepare('DELETE FROM task_assignees WHERE task_id = ?').run(id)
+          const insA = db.prepare('INSERT INTO task_assignees (task_id, name) VALUES (?, ?)')
+          for (const name of patch.assignees) insA.run(id, name)
+        }
+
+        const newRow = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id)
+        const newAssignees = Array.isArray(patch.assignees) ? patch.assignees : oldAssignees
+        db.prepare(`
+          INSERT INTO audit_log (table_name, row_id, action, changed_by, old_values, new_values)
+          VALUES ('tasks', ?, 'UPDATE', 'user', ?, ?)
+        `).run(
+          id,
+          JSON.stringify({ ...oldRow, assignees: oldAssignees }),
+          JSON.stringify({ ...newRow, assignees: newAssignees }),
+        )
+      })
+      tx()
+      return { ok: true, task: getTaskById(id) }
+    } catch (err) {
+      console.error('[DB] update-task failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:soft-delete-task', (_event, id) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const tx = db.transaction(() => {
+        const oldRow = db.prepare('SELECT * FROM tasks WHERE id = ? AND is_deleted = 0').get(id)
+        if (!oldRow) throw new Error(`Task ${id} not found`)
+        const oldAssignees = db.prepare('SELECT name FROM task_assignees WHERE task_id = ?').all(id).map(r => r.name)
+
+        db.prepare(`UPDATE tasks SET is_deleted = 1, updated_at = datetime('now') WHERE id = ?`).run(id)
+
+        db.prepare(`
+          INSERT INTO audit_log (table_name, row_id, action, changed_by, old_values)
+          VALUES ('tasks', ?, 'DELETE', 'user', ?)
+        `).run(id, JSON.stringify({ ...oldRow, assignees: oldAssignees }))
+      })
+      tx()
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] soft-delete-task failed:', err.message)
       return { ok: false, error: err.message }
     }
   })
