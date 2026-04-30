@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import type { Assignee, Category, Priority, Status, Task, TaskInput } from '../types'
 import { ALL_PRIORITIES, ALL_STATUSES } from '../types'
 import { ConfirmDialog } from '../components/ConfirmDialog'
@@ -25,6 +25,12 @@ const STATUS_LABEL: Record<Status, string> = {
   CANCELLED: 'Cancelled',
 }
 
+const STATUS_SORT_INDEX: Record<Status, string> = {
+  PLANNING: '0', WIP: '1', BLOCKED: '2', ON_HOLD: '3', DONE: '4', CANCELLED: '5',
+}
+
+type GroupBy = 'none' | 'category' | 'status' | 'owner'
+
 export function TaskListView() {
   const [tasks, setTasks]           = useState<Task[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -42,6 +48,10 @@ export function TaskListView() {
   const [filterOwners, setFilterOwners]           = useState<Set<string>>(new Set())
   const [filterDueRange, setFilterDueRange]       = useState<DueRange>('all')
   const [filterTags, setFilterTags]               = useState<Set<string>>(new Set())
+
+  // Iteration 2 / Phase 4: grouping
+  const [groupBy, setGroupBy]                 = useState<GroupBy>('none')
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const [modal, setModal]           = useState<ModalState>({ kind: 'closed' })
   const [confirmDelete, setConfirmDelete] = useState<Task | null>(null)
 
@@ -172,6 +182,46 @@ export function TaskListView() {
     return next
   }
 
+  const groups = useMemo(() => {
+    if (groupBy === 'none') {
+      return [{ key: 'all', label: '', tasks: visibleTopLevel }]
+    }
+    const buckets = new Map<string, { label: string; sortKey: string; tasks: Task[] }>()
+    for (const t of visibleTopLevel) {
+      let key:     string
+      let label:   string
+      let sortKey: string
+      if (groupBy === 'category') {
+        const c = categories.find(x => x.id === t.categoryId)
+        key     = c ? `c:${c.id}` : 'c:none'
+        label   = c?.name ?? '(No category)'
+        sortKey = c ? String(c.sortOrder ?? 999).padStart(4, '0') + label : 'zzz' + label
+      } else if (groupBy === 'status') {
+        key     = `s:${t.status}`
+        label   = STATUS_LABEL[t.status]
+        sortKey = STATUS_SORT_INDEX[t.status] + t.status
+      } else {
+        key     = t.primaryOwner ? `o:${t.primaryOwner}` : 'o:none'
+        label   = t.primaryOwner ?? '(Unassigned)'
+        sortKey = t.primaryOwner ? '0' + t.primaryOwner : 'zzz'
+      }
+      if (!buckets.has(key)) buckets.set(key, { label, sortKey, tasks: [] })
+      buckets.get(key)!.tasks.push(t)
+    }
+    return [...buckets.entries()]
+      .sort((a, b) => a[1].sortKey.localeCompare(b[1].sortKey))
+      .map(([key, v]) => ({ key, label: v.label, tasks: v.tasks }))
+  }, [visibleTopLevel, groupBy, categories])
+
+  const toggleGroup = (key: string) => {
+    setCollapsedGroups(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
   const toggleStatus = (s: Status) => {
     setVisibleStatuses(prev => {
       const next = new Set(prev)
@@ -275,6 +325,15 @@ export function TaskListView() {
           </button>
         ))}
         <div className="filter-bar-spacer" />
+        <label className="group-by-control">
+          <span className="muted compact">Group:</span>
+          <select value={groupBy} onChange={e => setGroupBy(e.target.value as GroupBy)}>
+            <option value="none">None</option>
+            <option value="category">Category</option>
+            <option value="status">Status</option>
+            <option value="owner">Owner</option>
+          </select>
+        </label>
         <button
           type="button"
           className={`chip filter-toggle-chip ${activeFilterCount > 0 ? 'active' : ''}`}
@@ -397,22 +456,39 @@ export function TaskListView() {
               </tr>
             </thead>
             <tbody>
-              {visibleTopLevel.map(t => {
-                const children = childrenByParent.get(t.id) ?? []
-                const isExpanded = expandedIds.has(t.id)
+              {groups.map(g => {
+                const showHeader = groupBy !== 'none'
+                const collapsed  = collapsedGroups.has(g.key)
                 return (
-                  <RowGroup
-                    key={t.id}
-                    task={t}
-                    children={children}
-                    isExpanded={isExpanded}
-                    categoryColour={categories.find(c => c.id === t.categoryId)?.colour ?? null}
-                    onToggle={() => toggleExpand(t.id)}
-                    onOpen={(target) => setModal({ kind: 'edit', task: target })}
-                    onMarkDone={(target) => markDone(target)}
-                    onUndone={(target) => undone(target)}
-                    onAddSubtask={() => setModal({ kind: 'add-subtask', parent: t })}
-                  />
+                  <Fragment key={g.key}>
+                    {showHeader && (
+                      <tr className="group-header" onClick={() => toggleGroup(g.key)}>
+                        <td colSpan={10}>
+                          <span className={`group-header-chevron ${collapsed ? '' : 'group-header-chevron-open'}`}>▶</span>
+                          <span className="group-header-label">{g.label}</span>
+                          <span className="group-header-count muted">({g.tasks.length})</span>
+                        </td>
+                      </tr>
+                    )}
+                    {!collapsed && g.tasks.map(t => {
+                      const children = childrenByParent.get(t.id) ?? []
+                      const isExpanded = expandedIds.has(t.id)
+                      return (
+                        <RowGroup
+                          key={t.id}
+                          task={t}
+                          children={children}
+                          isExpanded={isExpanded}
+                          categoryColour={categories.find(c => c.id === t.categoryId)?.colour ?? null}
+                          onToggle={() => toggleExpand(t.id)}
+                          onOpen={(target) => setModal({ kind: 'edit', task: target })}
+                          onMarkDone={(target) => markDone(target)}
+                          onUndone={(target) => undone(target)}
+                          onAddSubtask={() => setModal({ kind: 'add-subtask', parent: t })}
+                        />
+                      )
+                    })}
+                  </Fragment>
                 )
               })}
             </tbody>

@@ -6246,3 +6246,70 @@ kbd {
   font-size: 0.78rem;
   border-radius: 8px;
 }
+
+/* ── Iteration 2: Grouping ──────────────────────────────────────── */
+
+.group-by-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.group-by-control select {
+  appearance: none;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 26px 5px 10px;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.group-by-control select:hover {
+  border-color: rgba(99, 102, 241, 0.5);
+}
+
+.group-header {
+  cursor: pointer;
+}
+.group-header td {
+  background: var(--surface-raised);
+  padding: 0.5rem 0.85rem !important;
+  border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  position: sticky;
+  top: 1.85rem;
+  z-index: 1;
+}
+.group-header:hover td {
+  background: var(--surface);
+}
+.group-header-chevron {
+  display: inline-block;
+  font-size: 0.65rem;
+  margin-right: 0.5rem;
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.group-header-chevron-open { transform: rotate(90deg); color: var(--text); }
+.group-header-label { color: var(--text); }
+.group-header-count {
+  margin-left: 0.5rem;
+  font-weight: 400;
+  font-size: 0.78rem;
+  letter-spacing: 0;
+}
