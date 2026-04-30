@@ -34,6 +34,12 @@ declare global {
     createTask:      (input: import('./types').TaskInput) => Promise<{ ok: boolean; task?: import('./types').Task; error?: string }>
     updateTask:      (id: number, patch: import('./types').TaskPatch) => Promise<{ ok: boolean; task?: import('./types').Task; error?: string }>
     softDeleteTask:  (id: number) => Promise<{ ok: boolean; error?: string }>
+
+    // Workflows — Iteration 3
+    listWorkflowTemplates:  () => Promise<import('./types').WorkflowTemplate[]>
+    listWorkflowInstances:  () => Promise<import('./types').WorkflowInstance[]>
+    createWorkflowInstance: (input: import('./types').NewWorkflowInput) =>
+      Promise<{ ok: boolean; instanceId?: number; error?: string }>
   }
 
   interface FrameAppApi {

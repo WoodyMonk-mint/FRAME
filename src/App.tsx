@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import type { ViewDef, ViewId } from './types'
 import { TaskListView } from './views/TaskListView'
+import { WorkflowsView } from './views/WorkflowsView'
 import './index.css'
 
 // FRAME — Focus, Resource and Activity Management Engine
 
 const VIEWS: ViewDef[] = [
   { id: 'tasks',     label: 'Task List' },
+  { id: 'workflows', label: 'Workflows' },
   { id: 'my-work',   label: 'My Work',   iterationNote: 'Coming in Iteration 9 — personal task view filtered to the active user.' },
   { id: 'dashboard', label: 'Dashboard', iterationNote: 'Coming in Iteration 6 — summary cards and charts.' },
   { id: 'calendar',  label: 'Calendar',  iterationNote: 'Coming in Iteration 7 — month/week view with task blocks.' },
@@ -75,6 +77,8 @@ function App() {
       <main className="main-content">
         {view.id === 'tasks' ? (
           <TaskListView />
+        ) : view.id === 'workflows' ? (
+          <WorkflowsView />
         ) : (
           <>
             <header className="view-header">

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import type { Assignee, Category, Status, Task, TaskInput } from '../types'
+import type { Assignee, Category, Status, Task, TaskInput, WorkflowInstance } from '../types'
 import { ALL_PRIORITIES, ALL_STATUSES } from '../types'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { MarkDoneDialog } from '../components/MarkDoneDialog'
@@ -10,7 +10,7 @@ import { SavedViewsDropdown } from '../components/SavedViewsDropdown'
 import { SingleSelectDropdown } from '../components/SingleSelectDropdown'
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import type { DueRange } from '../lib/date'
-import { formatDate, isOverdue, todayIso } from '../lib/date'
+import { formatDate, isInDueRange, isOverdue, todayIso } from '../lib/date'
 import { effectivePercent, openSubtaskCount } from '../lib/percent'
 import { tasksToCsv } from '../lib/csv'
 import type { SortColumn, TaskFilters, TaskFilterPreset } from '../lib/taskFilters'
@@ -52,15 +52,37 @@ const DUE_RANGE_OPTIONS: Array<{ value: DueRange; label: string }> = [
 
 const UNASSIGNED_KEY = ''
 
+// Top-level rows are either real tasks or synthetic workflow-instance rows.
+// Workflow rows nest their step-tasks underneath, the same way parent tasks
+// nest subtasks.
+type TopRow =
+  | { kind: 'task';     task: Task }
+  | { kind: 'workflow'; instance: WorkflowInstance }
+
+function isKnownStatus(s: string): s is Status {
+  return (ALL_STATUSES as readonly string[]).includes(s)
+}
+
+// Filter pass for workflow rows. Priority / owner / tag don't apply
+// (workflows have none of these), so they always pass those dimensions.
+function passesWorkflowFilters(i: WorkflowInstance, f: TaskFilters): boolean {
+  if (isKnownStatus(i.status) && f.excludedStatuses.includes(i.status)) return false
+  if (i.categoryId !== null && f.excludedCategoryIds.includes(i.categoryId)) return false
+  if (!isInDueRange(i.targetDate, isKnownStatus(i.status) ? i.status : 'WIP', f.dueRange)) return false
+  return true
+}
+
 export function TaskListView() {
   const [tasks, setTasks]           = useState<Task[]>([])
+  const [workflows, setWorkflows]   = useState<WorkflowInstance[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [assignees, setAssignees]   = useState<Assignee[]>([])
   const [tagSuggestions, setTagSuggestions] = useState<string[]>([])
   const [loading, setLoading]       = useState(true)
   const [error, setError]           = useState<string | null>(null)
 
-  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
+  const [expandedIds, setExpandedIds]                 = useState<Set<number>>(new Set())
+  const [expandedWorkflowIds, setExpandedWorkflowIds] = useState<Set<number>>(new Set())
 
   // Filter model: a single TaskFilters object plus saved-view machinery.
   const [filters, setFiltersState] = useState<TaskFilters>(DEFAULT_FILTERS)
@@ -83,13 +105,15 @@ export function TaskListView() {
   const reload = async () => {
     setError(null)
     try {
-      const [t, c, a, tg] = await Promise.all([
+      const [t, w, c, a, tg] = await Promise.all([
         window.frame.db.listTasks(),
+        window.frame.db.listWorkflowInstances(),
         window.frame.db.listCategories(),
         window.frame.db.listAssignees(),
         window.frame.db.listTags(),
       ])
       setTasks(t)
+      setWorkflows(w)
       setCategories(c)
       setAssignees(a)
       setTagSuggestions(tg)
@@ -116,14 +140,16 @@ export function TaskListView() {
     }
     void (async () => {
       try {
-        const [t, c, a, tg] = await Promise.all([
+        const [t, w, c, a, tg] = await Promise.all([
           window.frame.db.listTasks(),
+          window.frame.db.listWorkflowInstances(),
           window.frame.db.listCategories(),
           window.frame.db.listAssignees(),
           window.frame.db.listTags(),
         ])
         if (!cancelled) {
           setTasks(t)
+          setWorkflows(w)
           setCategories(c)
           setAssignees(a)
           setTagSuggestions(tg)
@@ -206,6 +232,8 @@ export function TaskListView() {
 
   // ─── Derived data ────────────────────────────────────────────────────────
 
+  // Subtasks of regular tasks (parent_task_id linkage). Used for parent-task
+  // nesting and the auto-percent calculation.
   const allChildrenByParent = useMemo(() => {
     const m = new Map<number, Task[]>()
     for (const t of tasks) {
@@ -230,36 +258,53 @@ export function TaskListView() {
     return m
   }, [tasks, filters])
 
-  const visibleTopLevel = useMemo(
-    () => {
-      const base = tasks.filter(t => t.parentTaskId === null && passesFilters(t, filters))
-      if (!filters.sortBy || !filters.sortDir) return base
-      const sorted = [...base]
-      const col = filters.sortBy
-      sorted.sort((a, b) => {
-        let cmp = 0
-        switch (col) {
-          case 'category': cmp = (a.categoryName ?? '~').localeCompare(b.categoryName ?? '~'); break
-          case 'title':    cmp = a.title.localeCompare(b.title); break
-          case 'status':   cmp = STATUS_SORT_INDEX[a.status].localeCompare(STATUS_SORT_INDEX[b.status]); break
-          case 'priority': cmp = (a.priority ?? 'P9').localeCompare(b.priority ?? 'P9'); break
-          case 'due':      cmp = (a.dueDate ?? '9999-99-99').localeCompare(b.dueDate ?? '9999-99-99'); break
-          case 'owner':    cmp = (a.primaryOwner ?? '~').localeCompare(b.primaryOwner ?? '~'); break
-          case 'team':     cmp = a.assignees.length - b.assignees.length; break
-          case 'tags':     cmp = a.tags.length - b.tags.length; break
-          case 'percent': {
-            const ap = effectivePercent(a, allChildrenByParent.get(a.id) ?? [])
-            const bp = effectivePercent(b, allChildrenByParent.get(b.id) ?? [])
-            cmp = ap - bp
-            break
-          }
-        }
-        return filters.sortDir === 'desc' ? -cmp : cmp
-      })
-      return sorted
-    },
-    [tasks, filters, allChildrenByParent]
-  )
+  // Workflow steps grouped by their parent instance, sorted by step_number.
+  // A workflow step is a task with workflow_instance_id set and no parent_task_id.
+  const stepsByWorkflowId = useMemo(() => {
+    const m = new Map<number, Task[]>()
+    for (const t of tasks) {
+      if (t.workflowInstanceId !== null && t.parentTaskId === null) {
+        const arr = m.get(t.workflowInstanceId) ?? []
+        arr.push(t)
+        m.set(t.workflowInstanceId, arr)
+      }
+    }
+    for (const arr of m.values()) {
+      arr.sort((a, b) => (a.workflowStepNumber ?? 0) - (b.workflowStepNumber ?? 0))
+    }
+    return m
+  }, [tasks])
+
+  const visibleStepsByWorkflowId = useMemo(() => {
+    const m = new Map<number, Task[]>()
+    for (const [id, steps] of stepsByWorkflowId) {
+      m.set(id, steps.filter(s => passesFilters(s, filters)))
+    }
+    return m
+  }, [stepsByWorkflowId, filters])
+
+  // The unified row list: real top-level tasks + synthetic workflow rows.
+  const topRows = useMemo<TopRow[]>(() => {
+    const rows: TopRow[] = []
+    for (const t of tasks) {
+      if (t.parentTaskId === null && t.workflowInstanceId === null && passesFilters(t, filters)) {
+        rows.push({ kind: 'task', task: t })
+      }
+    }
+    for (const w of workflows) {
+      if (passesWorkflowFilters(w, filters)) {
+        rows.push({ kind: 'workflow', instance: w })
+      }
+    }
+    if (!filters.sortBy || !filters.sortDir) return rows
+    const col = filters.sortBy
+    const sorted = [...rows]
+    sorted.sort((a, b) => {
+      const cmp = compareForSort(a, b, col, allChildrenByParent)
+      return filters.sortDir === 'desc' ? -cmp : cmp
+    })
+    return sorted
+  }, [tasks, workflows, filters, allChildrenByParent])
 
   // Click-to-cycle: unsorted → asc → desc → unsorted (back to IPC default order).
   const cycleSort = (col: NonNullable<SortColumn>) => {
@@ -271,9 +316,14 @@ export function TaskListView() {
     setActivePresetId(null)
   }
 
-  const totalTopLevel = useMemo(
-    () => tasks.filter(t => t.parentTaskId === null).length,
+  const totalTopLevelTasks = useMemo(
+    () => tasks.filter(t => t.parentTaskId === null && t.workflowInstanceId === null).length,
     [tasks]
+  )
+
+  const visibleTopLevelTaskCount = useMemo(
+    () => topRows.filter(r => r.kind === 'task').length,
+    [topRows]
   )
 
   // Owner option set: union of seeded assignees and any owner already on a task,
@@ -293,34 +343,18 @@ export function TaskListView() {
 
   const groups = useMemo(() => {
     if (groupBy === 'none') {
-      return [{ key: 'all', label: '', tasks: visibleTopLevel }]
+      return [{ key: 'all', label: '', rows: topRows }]
     }
-    const buckets = new Map<string, { label: string; sortKey: string; tasks: Task[] }>()
-    for (const t of visibleTopLevel) {
-      let key:     string
-      let label:   string
-      let sortKey: string
-      if (groupBy === 'category') {
-        const c = categories.find(x => x.id === t.categoryId)
-        key     = c ? `c:${c.id}` : 'c:none'
-        label   = c?.name ?? '(No category)'
-        sortKey = c ? String(c.sortOrder ?? 999).padStart(4, '0') + label : 'zzz' + label
-      } else if (groupBy === 'status') {
-        key     = `s:${t.status}`
-        label   = STATUS_LABEL[t.status]
-        sortKey = STATUS_SORT_INDEX[t.status] + t.status
-      } else {
-        key     = t.primaryOwner ? `o:${t.primaryOwner}` : 'o:none'
-        label   = t.primaryOwner ?? '(Unassigned)'
-        sortKey = t.primaryOwner ? '0' + t.primaryOwner : 'zzz'
-      }
-      if (!buckets.has(key)) buckets.set(key, { label, sortKey, tasks: [] })
-      buckets.get(key)!.tasks.push(t)
+    const buckets = new Map<string, { label: string; sortKey: string; rows: TopRow[] }>()
+    for (const r of topRows) {
+      const { key, label, sortKey } = groupKeyFor(r, groupBy, categories)
+      if (!buckets.has(key)) buckets.set(key, { label, sortKey, rows: [] })
+      buckets.get(key)!.rows.push(r)
     }
     return [...buckets.entries()]
       .sort((a, b) => a[1].sortKey.localeCompare(b[1].sortKey))
-      .map(([key, v]) => ({ key, label: v.label, tasks: v.tasks }))
-  }, [visibleTopLevel, groupBy, categories])
+      .map(([key, v]) => ({ key, label: v.label, rows: v.rows }))
+  }, [topRows, groupBy, categories])
 
   const toggleGroup = (key: string) => {
     setCollapsedGroups(prev => {
@@ -333,6 +367,15 @@ export function TaskListView() {
 
   const toggleExpand = (id: number) => {
     setExpandedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleWorkflowExpand = (id: number) => {
+    setExpandedWorkflowIds(prev => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
@@ -397,9 +440,13 @@ export function TaskListView() {
     setError(null)
     const flat: Task[] = []
     for (const g of groups) {
-      for (const t of g.tasks) {
-        flat.push(t)
-        for (const c of (childrenByParent.get(t.id) ?? [])) flat.push(c)
+      for (const r of g.rows) {
+        if (r.kind === 'task') {
+          flat.push(r.task)
+          for (const c of (childrenByParent.get(r.task.id) ?? [])) flat.push(c)
+        } else {
+          for (const s of (visibleStepsByWorkflowId.get(r.instance.id) ?? [])) flat.push(s)
+        }
       }
     }
     if (flat.length === 0) {
@@ -425,12 +472,17 @@ export function TaskListView() {
     filters.excludedTags.length        > 0 ||
     filters.dueRange                   !== 'all'
 
+  const workflowCount = topRows.filter(r => r.kind === 'workflow').length
+
   return (
     <div className="task-view">
       <header className="view-header view-header-row">
         <div>
           <h1>Task List</h1>
-          <p className="muted compact">{visibleTopLevel.length} of {totalTopLevel} task{totalTopLevel === 1 ? '' : 's'}</p>
+          <p className="muted compact">
+            {visibleTopLevelTaskCount} of {totalTopLevelTasks} task{totalTopLevelTasks === 1 ? '' : 's'}
+            {workflowCount > 0 && ` · ${workflowCount} workflow${workflowCount === 1 ? '' : 's'}`}
+          </p>
         </div>
         <div className="header-actions">
           <button className="chip" onClick={exportCsv}>Export CSV</button>
@@ -549,11 +601,11 @@ export function TaskListView() {
         />
       </div>
 
-      {visibleTopLevel.length === 0 ? (
+      {topRows.length === 0 ? (
         <div className="view-empty">
           <p className="muted">
-            {totalTopLevel === 0
-              ? 'No tasks yet. Click "Add task" to create one.'
+            {totalTopLevelTasks === 0 && workflows.length === 0
+              ? 'No tasks yet. Click "Add task" to create one, or start a workflow from the Workflows view.'
               : 'No tasks match the current filter.'}
           </p>
         </div>
@@ -565,12 +617,12 @@ export function TaskListView() {
                 <SortTh col="category" sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="11rem">Category</SortTh>
                 <SortTh col="title"    sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort}>Title</SortTh>
                 <SortTh col="status"   sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="7rem">Status</SortTh>
+                <SortTh col="percent"  sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="7.5rem" align="right">%</SortTh>
                 <SortTh col="priority" sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="4rem">Pri</SortTh>
                 <SortTh col="due"      sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="8rem">Due</SortTh>
                 <SortTh col="owner"    sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="8rem">Owner</SortTh>
                 <SortTh col="team"     sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="9rem">Team</SortTh>
                 <SortTh col="tags"     sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="11rem">Tags</SortTh>
-                <SortTh col="percent"  sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="5.5rem" align="right">%</SortTh>
               </tr>
             </thead>
             <tbody>
@@ -584,23 +636,41 @@ export function TaskListView() {
                         <td colSpan={9}>
                           <span className={`group-header-chevron ${collapsed ? '' : 'group-header-chevron-open'}`}>▶</span>
                           <span className="group-header-label">{g.label}</span>
-                          <span className="group-header-count muted">({g.tasks.length})</span>
+                          <span className="group-header-count muted">({g.rows.length})</span>
                         </td>
                       </tr>
                     )}
-                    {!collapsed && g.tasks.map(t => {
-                      const children = childrenByParent.get(t.id) ?? []
-                      const isExpanded = expandedIds.has(t.id)
+                    {!collapsed && g.rows.map(r => {
+                      if (r.kind === 'task') {
+                        const t = r.task
+                        const children = childrenByParent.get(t.id) ?? []
+                        const isExpanded = expandedIds.has(t.id)
+                        return (
+                          <RowGroup
+                            key={`t-${t.id}`}
+                            task={t}
+                            children={children}
+                            isExpanded={isExpanded}
+                            categoryColour={categories.find(c => c.id === t.categoryId)?.colour ?? null}
+                            onToggle={() => toggleExpand(t.id)}
+                            onOpen={(target) => setModal({ kind: 'edit', task: target })}
+                            onAddSubtask={() => setModal({ kind: 'add-subtask', parent: t })}
+                            onContextMenu={(target, x, y) => setCtxMenu({ task: target, x, y })}
+                          />
+                        )
+                      }
+                      const inst = r.instance
+                      const steps = visibleStepsByWorkflowId.get(inst.id) ?? []
+                      const isExpanded = expandedWorkflowIds.has(inst.id)
                       return (
-                        <RowGroup
-                          key={t.id}
-                          task={t}
-                          children={children}
+                        <WorkflowRowGroup
+                          key={`w-${inst.id}`}
+                          instance={inst}
+                          steps={steps}
                           isExpanded={isExpanded}
-                          categoryColour={categories.find(c => c.id === t.categoryId)?.colour ?? null}
-                          onToggle={() => toggleExpand(t.id)}
-                          onOpen={(target) => setModal({ kind: 'edit', task: target })}
-                          onAddSubtask={() => setModal({ kind: 'add-subtask', parent: t })}
+                          categoryColour={categories.find(c => c.id === inst.categoryId)?.colour ?? null}
+                          onToggle={() => toggleWorkflowExpand(inst.id)}
+                          onOpenStep={(target) => setModal({ kind: 'edit', task: target })}
                           onContextMenu={(target, x, y) => setCtxMenu({ task: target, x, y })}
                         />
                       )
@@ -627,7 +697,7 @@ export function TaskListView() {
           onSave={saveTask}
           onDelete={modal.kind === 'edit' ? () => setConfirmDelete(modal.task) : undefined}
           onAddSubtask={
-            modal.kind === 'edit' && modal.task.parentTaskId === null
+            modal.kind === 'edit' && modal.task.parentTaskId === null && modal.task.workflowInstanceId === null
               ? () => setModal({ kind: 'add-subtask', parent: modal.task })
               : undefined
           }
@@ -657,7 +727,9 @@ export function TaskListView() {
       {ctxMenu && (() => {
         const t       = ctxMenu.task
         const isDone  = t.status === 'DONE'
-        const canSub  = t.parentTaskId === null
+        // Subtasks aren't allowed on subtasks, and (for now) not on workflow
+        // step-tasks either — keeps the nesting depth manageable.
+        const canSub  = t.parentTaskId === null && t.workflowInstanceId === null
         const openCount = openSubtaskCount(allChildrenByParent.get(t.id) ?? [])
         const blockedFromDone = !isDone && openCount > 0
         const markLabel = isDone
@@ -686,6 +758,108 @@ export function TaskListView() {
     </div>
   )
 }
+
+// ─── Sort + group helpers ───────────────────────────────────────────────────
+
+function compareForSort(
+  a: TopRow, b: TopRow,
+  col: NonNullable<SortColumn>,
+  allChildrenByParent: Map<number, Task[]>,
+): number {
+  const av = sortKeyForRow(a, col, allChildrenByParent)
+  const bv = sortKeyForRow(b, col, allChildrenByParent)
+  if (typeof av === 'number' && typeof bv === 'number') return av - bv
+  return String(av).localeCompare(String(bv))
+}
+
+function sortKeyForRow(
+  r: TopRow,
+  col: NonNullable<SortColumn>,
+  allChildrenByParent: Map<number, Task[]>,
+): string | number {
+  if (r.kind === 'workflow') {
+    const i = r.instance
+    switch (col) {
+      case 'category': return i.categoryName ?? '~'
+      case 'title':    return i.name
+      case 'status':   return isKnownStatus(i.status) ? STATUS_SORT_INDEX[i.status] : '5'
+      case 'priority': return 'P9'
+      case 'due':      return i.targetDate ?? '9999-99-99'
+      case 'owner':    return '~'
+      case 'team':     return -1
+      case 'tags':     return -1
+      case 'percent':  return i.percentDone
+    }
+  }
+  const t = r.task
+  switch (col) {
+    case 'category': return t.categoryName ?? '~'
+    case 'title':    return t.title
+    case 'status':   return STATUS_SORT_INDEX[t.status]
+    case 'priority': return t.priority ?? 'P9'
+    case 'due':      return t.dueDate ?? '9999-99-99'
+    case 'owner':    return t.primaryOwner ?? '~'
+    case 'team':     return t.assignees.length
+    case 'tags':     return t.tags.length
+    case 'percent':  return effectivePercent(t, allChildrenByParent.get(t.id) ?? [])
+  }
+}
+
+function groupKeyFor(
+  r: TopRow,
+  groupBy: 'category' | 'status' | 'owner',
+  categories: Category[],
+): { key: string; label: string; sortKey: string } {
+  if (r.kind === 'workflow') {
+    const i = r.instance
+    if (groupBy === 'category') {
+      const c = categories.find(x => x.id === i.categoryId)
+      const label = c?.name ?? '(No category)'
+      return {
+        key:     c ? `c:${c.id}` : 'c:none',
+        label,
+        sortKey: c ? String(c.sortOrder ?? 999).padStart(4, '0') + label : 'zzz' + label,
+      }
+    } else if (groupBy === 'status') {
+      if (isKnownStatus(i.status)) {
+        return {
+          key:     `s:${i.status}`,
+          label:   STATUS_LABEL[i.status],
+          sortKey: STATUS_SORT_INDEX[i.status] + i.status,
+        }
+      }
+      return {
+        key:     `s:${i.status}`,
+        label:   i.status,
+        sortKey: '9' + i.status,
+      }
+    }
+    return { key: 'o:none', label: '(Unassigned)', sortKey: 'zzz' }
+  }
+  const t = r.task
+  if (groupBy === 'category') {
+    const c = categories.find(x => x.id === t.categoryId)
+    const label = c?.name ?? '(No category)'
+    return {
+      key:     c ? `c:${c.id}` : 'c:none',
+      label,
+      sortKey: c ? String(c.sortOrder ?? 999).padStart(4, '0') + label : 'zzz' + label,
+    }
+  } else if (groupBy === 'status') {
+    return {
+      key:     `s:${t.status}`,
+      label:   STATUS_LABEL[t.status],
+      sortKey: STATUS_SORT_INDEX[t.status] + t.status,
+    }
+  }
+  return {
+    key:     t.primaryOwner ? `o:${t.primaryOwner}` : 'o:none',
+    label:   t.primaryOwner ?? '(Unassigned)',
+    sortKey: t.primaryOwner ? '0' + t.primaryOwner : 'zzz',
+  }
+}
+
+// ─── Sub-components ─────────────────────────────────────────────────────────
 
 function SortTh({
   col, sortBy, sortDir, onClick, width, align = 'left', children,
@@ -779,10 +953,96 @@ function RowGroup({
   )
 }
 
+function WorkflowRowGroup({
+  instance, steps, isExpanded, categoryColour,
+  onToggle, onOpenStep, onContextMenu,
+}: {
+  instance:       WorkflowInstance
+  steps:          Task[]
+  isExpanded:     boolean
+  categoryColour: string | null
+  onToggle:       () => void
+  onOpenStep:     (t: Task) => void
+  onContextMenu:  (t: Task, x: number, y: number) => void
+}) {
+  const status = isKnownStatus(instance.status) ? instance.status : 'WIP'
+  const overdue = isOverdue(instance.targetDate, status)
+  const titleSuffix = [
+    instance.gateType   ? `(${instance.gateType})`         : null,
+    instance.projectRef ? `· ${instance.projectRef}`        : null,
+  ].filter(Boolean).join(' ')
+
+  return (
+    <>
+      <tr
+        className="task-row task-row-workflow"
+        onClick={onToggle}
+      >
+        <td>
+          <span className="category-cell">
+            <span className="category-dot" style={{ background: categoryColour ?? 'var(--muted)' }} />
+            <span className="category-name">{instance.categoryName ?? instance.templateName ?? '—'}</span>
+          </span>
+        </td>
+        <td className="task-title-cell">
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+            <button
+              type="button"
+              className={`expand-chevron ${isExpanded ? 'expand-chevron-open' : ''}`}
+              onClick={e => { e.stopPropagation(); onToggle() }}
+              aria-label={isExpanded ? 'Collapse workflow' : 'Expand workflow'}
+            >▶</button>
+            <span className="workflow-row-badge">Workflow</span>
+            <strong>{instance.name}</strong>
+            {titleSuffix && <span className="muted compact">{titleSuffix}</span>}
+          </span>
+        </td>
+        <td><StatusPill status={status} /></td>
+        <td style={{ textAlign: 'right' }}>
+          <span className="percent-cell">
+            <span className="percent-bar">
+              <span
+                className={`percent-bar-fill ${instance.percentDone === 100 ? 'is-done' : ''}`}
+                style={{ width: `${instance.percentDone}%` }}
+              />
+            </span>
+            <span className="percent-cell-num">{instance.percentDone}</span>
+            <span
+              className="percent-mode-badge percent-mode-auto"
+              title={`${instance.doneSteps}/${instance.totalSteps} steps complete`}
+            >W</span>
+          </span>
+        </td>
+        <td><span className="muted">—</span></td>
+        <td className={overdue ? 'overdue' : ''}>{formatDate(instance.targetDate)}</td>
+        <td><span className="muted">—</span></td>
+        <td><span className="muted">—</span></td>
+        <td><span className="muted">—</span></td>
+      </tr>
+      {isExpanded && steps.map(s => (
+        <TaskRow
+          key={s.id}
+          task={s}
+          depth={1}
+          canExpand={false}
+          isExpanded={false}
+          onToggle={() => {}}
+          categoryColour={categoryColour}
+          onOpen={() => onOpenStep(s)}
+          onContextMenu={(x, y) => onContextMenu(s, x, y)}
+          displayPercent={s.percentComplete}
+          percentMode="leaf"
+          stepNumber={s.workflowStepNumber}
+        />
+      ))}
+    </>
+  )
+}
+
 function TaskRow({
   task, depth, canExpand, isExpanded, onToggle,
   categoryColour, onOpen, onContextMenu,
-  displayPercent, percentMode,
+  displayPercent, percentMode, stepNumber,
 }: {
   task:            Task
   depth:           number
@@ -794,6 +1054,7 @@ function TaskRow({
   onContextMenu:   (x: number, y: number) => void
   displayPercent:  number
   percentMode:     'auto' | 'manual' | 'leaf'
+  stepNumber?:     number | null
 }) {
   const overdue = isOverdue(task.dueDate, task.status)
   const isDone  = task.status === 'DONE'
@@ -827,10 +1088,26 @@ function TaskRow({
               ? <span className="subtask-rail" aria-hidden>↳</span>
               : <span className="expand-chevron expand-chevron-spacer" aria-hidden></span>
           )}
+          {stepNumber != null && (
+            <span className="workflow-step-number muted compact">{stepNumber}.</span>
+          )}
           {task.title}
         </span>
       </td>
       <td><StatusPill status={task.status} /></td>
+      <td style={{ textAlign: 'right' }}>
+        <span className="percent-cell">
+          <span className="percent-bar">
+            <span
+              className={`percent-bar-fill ${displayPercent === 100 ? 'is-done' : ''}`}
+              style={{ width: `${displayPercent}%` }}
+            />
+          </span>
+          <span className="percent-cell-num">{displayPercent}</span>
+          {percentMode === 'auto'   && <span className="percent-mode-badge percent-mode-auto" title="Auto-computed from subtasks">A</span>}
+          {percentMode === 'manual' && <span className="percent-mode-badge percent-mode-manual" title="Manually overridden">M</span>}
+        </span>
+      </td>
       <td><PriorityPill priority={task.priority} /></td>
       <td className={overdue ? 'overdue' : ''}>{formatDate(task.dueDate)}</td>
       <td>{task.primaryOwner ?? <span className="muted">—</span>}</td>
@@ -843,13 +1120,6 @@ function TaskRow({
         {task.tags.length === 0
           ? <span className="muted">—</span>
           : <TagCellPile tags={task.tags} />}
-      </td>
-      <td style={{ textAlign: 'right' }}>
-        <span className="percent-cell">
-          {displayPercent}
-          {percentMode === 'auto'   && <span className="percent-mode-badge percent-mode-auto" title="Auto-computed from subtasks">A</span>}
-          {percentMode === 'manual' && <span className="percent-mode-badge percent-mode-manual" title="Manually overridden">M</span>}
-        </span>
       </td>
     </tr>
   )

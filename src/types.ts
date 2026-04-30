@@ -1,6 +1,6 @@
 // FRAME shared renderer types
 
-export type ViewId = 'tasks' | 'my-work' | 'dashboard' | 'calendar' | 'settings'
+export type ViewId = 'tasks' | 'workflows' | 'my-work' | 'dashboard' | 'calendar' | 'settings'
 
 export type ViewDef = {
   id:             ViewId
@@ -38,6 +38,8 @@ export type Task = {
   categoryId:         number | null
   categoryName:       string | null
   parentTaskId:       number | null
+  workflowInstanceId: number | null
+  workflowStepNumber: number | null
   title:              string
   description:        string | null
   status:             Status
@@ -72,4 +74,45 @@ export type TaskInput = {
 
 export type TaskPatch = Partial<TaskInput> & {
   completedDate?: string | null
+}
+
+// ─── Workflows ──────────────────────────────────────────────────────────────
+
+export type WorkflowTemplate = {
+  id:           number
+  name:         string
+  gateType:     string | null
+  description:  string | null
+  categoryId:   number | null
+  isArchived:   boolean
+  stepCount:    number
+}
+
+export type WorkflowInstance = {
+  id:            number
+  templateId:    number | null
+  templateName:  string | null
+  categoryId:    number | null
+  categoryName:  string | null
+  name:          string
+  gateType:      string | null
+  projectRef:    string | null
+  startDate:     string | null
+  targetDate:    string | null
+  status:        string
+  notes:         string | null
+  totalSteps:    number
+  doneSteps:     number
+  percentDone:   number
+  createdAt:     string
+  updatedAt:     string
+}
+
+export type NewWorkflowInput = {
+  templateId:  number
+  name:        string
+  gateType?:   string | null
+  projectRef?: string | null
+  startDate?:  string | null
+  targetDate?: string | null
 }

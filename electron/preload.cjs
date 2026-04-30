@@ -30,6 +30,11 @@ try {
       createTask:      (input)         => ipcRenderer.invoke('db:create-task', input),
       updateTask:      (id, patch)     => ipcRenderer.invoke('db:update-task', id, patch),
       softDeleteTask:  (id)            => ipcRenderer.invoke('db:soft-delete-task', id),
+
+      // Workflows — Iteration 3
+      listWorkflowTemplates:  ()       => ipcRenderer.invoke('db:list-workflow-templates'),
+      listWorkflowInstances:  ()       => ipcRenderer.invoke('db:list-workflow-instances'),
+      createWorkflowInstance: (input)  => ipcRenderer.invoke('db:create-workflow-instance', input),
     },
   })
   console.log('[preload] window.frame exposed OK')

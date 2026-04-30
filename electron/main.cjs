@@ -51,25 +51,27 @@ function setupPaths(chosenDbPath) {
 
 function taskRowToObject(r, assignees, tags) {
   return {
-    id:               r.id,
-    type:             r.type,
-    categoryId:       r.category_id,
-    categoryName:     r.category_name ?? null,
-    parentTaskId:     r.parent_task_id ?? null,
-    title:            r.title,
-    description:      r.description,
-    status:           r.status,
-    priority:         r.priority,
-    primaryOwner:     r.primary_owner,
-    assignees:        assignees ?? [],
-    tags:             tags ?? [],
-    dueDate:          r.due_date,
-    completedDate:    r.completed_date,
-    percentComplete:  r.percent_complete ?? 0,
-    percentManual:    !!r.percent_manual,
-    notes:            r.notes,
-    createdAt:        r.created_at,
-    updatedAt:        r.updated_at,
+    id:                  r.id,
+    type:                r.type,
+    categoryId:          r.category_id,
+    categoryName:        r.category_name ?? null,
+    parentTaskId:        r.parent_task_id ?? null,
+    workflowInstanceId:  r.workflow_instance_id ?? null,
+    workflowStepNumber:  r.workflow_step_number ?? null,
+    title:               r.title,
+    description:         r.description,
+    status:              r.status,
+    priority:            r.priority,
+    primaryOwner:        r.primary_owner,
+    assignees:           assignees ?? [],
+    tags:                tags ?? [],
+    dueDate:             r.due_date,
+    completedDate:       r.completed_date,
+    percentComplete:     r.percent_complete ?? 0,
+    percentManual:       !!r.percent_manual,
+    notes:               r.notes,
+    createdAt:           r.created_at,
+    updatedAt:           r.updated_at,
   }
 }
 
@@ -637,9 +639,10 @@ function registerIpcHandlers() {
   ipcMain.handle('db:list-tasks', () => {
     if (!db) return []
     const rows = db.prepare(`
-      SELECT t.*, c.name AS category_name
+      SELECT t.*, c.name AS category_name, wis.step_number AS workflow_step_number
       FROM tasks t
       LEFT JOIN categories c ON t.category_id = c.id
+      LEFT JOIN workflow_instance_steps wis ON wis.task_id = t.id
       WHERE t.is_deleted = 0
       ORDER BY
         CASE t.priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 ELSE 4 END,
@@ -828,6 +831,146 @@ function registerIpcHandlers() {
       return { ok: true, task: getTaskById(id) }
     } catch (err) {
       console.error('[DB] update-task failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  // ─── Workflows ────────────────────────────────────────────────────────────
+
+  ipcMain.handle('db:list-workflow-templates', () => {
+    if (!db) return []
+    const rows = db.prepare(`
+      SELECT t.*,
+        (SELECT COUNT(*) FROM workflow_template_steps s WHERE s.template_id = t.id) AS step_count
+      FROM workflow_templates t
+      WHERE t.is_archived = 0
+      ORDER BY t.name
+    `).all()
+    return rows.map(r => ({
+      id:          r.id,
+      name:        r.name,
+      gateType:    r.gate_type,
+      description: r.description,
+      categoryId:  r.category_id,
+      isArchived:  !!r.is_archived,
+      stepCount:   r.step_count,
+    }))
+  })
+
+  ipcMain.handle('db:list-workflow-instances', () => {
+    if (!db) return []
+    const rows = db.prepare(`
+      SELECT i.*, t.name AS template_name, t.category_id AS template_category_id,
+        c.name AS template_category_name,
+        (SELECT COUNT(*) FROM workflow_instance_steps s WHERE s.instance_id = i.id) AS total_steps,
+        (SELECT COUNT(*)
+         FROM workflow_instance_steps s
+         JOIN tasks tk ON tk.id = s.task_id
+         WHERE s.instance_id = i.id AND tk.status = 'DONE' AND tk.is_deleted = 0
+        ) AS done_steps
+      FROM workflow_instances i
+      LEFT JOIN workflow_templates t ON t.id = i.template_id
+      LEFT JOIN categories c ON c.id = t.category_id
+      ORDER BY i.created_at DESC
+    `).all()
+    return rows.map(r => ({
+      id:           r.id,
+      templateId:   r.template_id,
+      templateName: r.template_name,
+      categoryId:   r.template_category_id,
+      categoryName: r.template_category_name,
+      name:         r.name,
+      gateType:     r.gate_type,
+      projectRef:   r.project_ref,
+      startDate:    r.start_date,
+      targetDate:   r.target_date,
+      status:       r.status,
+      notes:        r.notes,
+      totalSteps:   r.total_steps,
+      doneSteps:    r.done_steps,
+      percentDone:  r.total_steps > 0 ? Math.round((r.done_steps / r.total_steps) * 100) : 0,
+      createdAt:    r.created_at,
+      updatedAt:    r.updated_at,
+    }))
+  })
+
+  ipcMain.handle('db:create-workflow-instance', (_event, input) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const addDays = (iso, n) => {
+        if (!iso || n == null) return null
+        const d = new Date(iso + 'T00:00:00Z')
+        d.setUTCDate(d.getUTCDate() + n)
+        return d.toISOString().slice(0, 10)
+      }
+
+      let newInstanceId
+      const tx = db.transaction(() => {
+        const tpl = db.prepare('SELECT * FROM workflow_templates WHERE id = ? AND is_archived = 0').get(input.templateId)
+        if (!tpl) throw new Error(`Template ${input.templateId} not found or archived`)
+        if (!input.name || !String(input.name).trim()) throw new Error('Workflow name is required')
+
+        const insIns = db.prepare(`
+          INSERT INTO workflow_instances (template_id, name, gate_type, project_ref, start_date, target_date, status)
+          VALUES (@templateId, @name, @gateType, @projectRef, @startDate, @targetDate, 'WIP')
+        `)
+        const r = insIns.run({
+          templateId:  tpl.id,
+          name:        String(input.name).trim(),
+          gateType:    input.gateType  ?? null,
+          projectRef:  input.projectRef ?? null,
+          startDate:   input.startDate ?? null,
+          targetDate:  input.targetDate ?? null,
+        })
+        newInstanceId = Number(r.lastInsertRowid)
+
+        const steps = db.prepare(`
+          SELECT * FROM workflow_template_steps WHERE template_id = ? ORDER BY step_number
+        `).all(tpl.id)
+
+        const insTask = db.prepare(`
+          INSERT INTO tasks (
+            type, category_id, workflow_instance_id, title, description,
+            status, priority, primary_owner, due_date, percent_complete
+          ) VALUES (
+            'workflow', @categoryId, @instanceId, @title, @description,
+            'PLANNING', NULL, @primaryOwner, @dueDate, 0
+          )
+        `)
+        const insAssignee = db.prepare('INSERT INTO task_assignees (task_id, name) VALUES (?, ?)')
+        const insStep = db.prepare(`
+          INSERT INTO workflow_instance_steps (instance_id, template_step_id, task_id, step_number, is_deviation)
+          VALUES (?, ?, ?, ?, 0)
+        `)
+
+        for (const s of steps) {
+          const dueDate = addDays(input.startDate ?? null, s.offset_days ?? null)
+          const taskRes = insTask.run({
+            categoryId:   tpl.category_id ?? null,
+            instanceId:   newInstanceId,
+            title:        s.title,
+            description:  s.description ?? null,
+            primaryOwner: s.default_owner ?? null,
+            dueDate,
+          })
+          const taskId = Number(taskRes.lastInsertRowid)
+          if (s.default_owner) {
+            // Mirror "primary owner auto-joins the team" convention.
+            insAssignee.run(taskId, s.default_owner)
+          }
+          insStep.run(newInstanceId, s.id, taskId, s.step_number)
+        }
+
+        const newRow = db.prepare('SELECT * FROM workflow_instances WHERE id = ?').get(newInstanceId)
+        db.prepare(`
+          INSERT INTO audit_log (table_name, row_id, action, changed_by, new_values)
+          VALUES ('workflow_instances', ?, 'INSERT', 'user', ?)
+        `).run(newInstanceId, JSON.stringify({ ...newRow, step_count: steps.length }))
+      })
+      tx()
+      return { ok: true, instanceId: newInstanceId }
+    } catch (err) {
+      console.error('[DB] create-workflow-instance failed:', err.message)
       return { ok: false, error: err.message }
     }
   })
