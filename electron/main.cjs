@@ -55,6 +55,7 @@ function taskRowToObject(r, assignees, tags) {
     type:             r.type,
     categoryId:       r.category_id,
     categoryName:     r.category_name ?? null,
+    parentTaskId:     r.parent_task_id ?? null,
     title:            r.title,
     description:      r.description,
     status:           r.status,
@@ -65,6 +66,7 @@ function taskRowToObject(r, assignees, tags) {
     dueDate:          r.due_date,
     completedDate:    r.completed_date,
     percentComplete:  r.percent_complete ?? 0,
+    percentManual:    !!r.percent_manual,
     notes:            r.notes,
     createdAt:        r.created_at,
     updatedAt:        r.updated_at,
@@ -382,6 +384,16 @@ function seedDatabase() {
   seed()
 }
 
+// ─── Migrations ───────────────────────────────────────────────────────────────
+
+function runMigrations() {
+  const taskCols = db.pragma('table_info(tasks)').map(c => c.name)
+  if (!taskCols.includes('percent_manual')) {
+    db.exec('ALTER TABLE tasks ADD COLUMN percent_manual INTEGER DEFAULT 0')
+    console.log('[DB] Added percent_manual column to tasks')
+  }
+}
+
 // ─── Core: open, integrity-check, schema, seed ───────────────────────────────
 
 function openAndValidateDb() {
@@ -402,6 +414,7 @@ function openAndValidateDb() {
   db.pragma('foreign_keys = ON')
 
   runSchema()
+  runMigrations()
   seedDatabase()
 
   console.log('[DB] Opened and validated:', dbPath)
@@ -683,15 +696,16 @@ function registerIpcHandlers() {
       const tx = db.transaction(() => {
         const ins = db.prepare(`
           INSERT INTO tasks (
-            type, category_id, title, description, status, priority,
-            primary_owner, due_date, percent_complete, notes
+            type, category_id, parent_task_id, title, description, status, priority,
+            primary_owner, due_date, percent_complete, percent_manual, notes
           ) VALUES (
-            'one-off', @categoryId, @title, @description, @status, @priority,
-            @primaryOwner, @dueDate, @percentComplete, @notes
+            'one-off', @categoryId, @parentTaskId, @title, @description, @status, @priority,
+            @primaryOwner, @dueDate, @percentComplete, @percentManual, @notes
           )
         `)
         const result = ins.run({
           categoryId:      input.categoryId ?? null,
+          parentTaskId:    input.parentTaskId ?? null,
           title:           input.title,
           description:     input.description ?? null,
           status:          input.status ?? 'PLANNING',
@@ -699,6 +713,7 @@ function registerIpcHandlers() {
           primaryOwner:    input.primaryOwner ?? null,
           dueDate:         input.dueDate ?? null,
           percentComplete: input.percentComplete ?? 0,
+          percentManual:   input.percentManual ? 1 : 0,
           notes:           input.notes ?? null,
         })
         newId = Number(result.lastInsertRowid)
@@ -752,6 +767,7 @@ function registerIpcHandlers() {
           priority:        'priority',
           dueDate:         'due_date',
           percentComplete: 'percent_complete',
+          percentManual:   'percent_manual',
           description:     'description',
           notes:           'notes',
           completedDate:   'completed_date',
@@ -759,7 +775,8 @@ function registerIpcHandlers() {
         for (const [tsKey, sqlKey] of Object.entries(map)) {
           if (Object.prototype.hasOwnProperty.call(patch, tsKey)) {
             setParts.push(`${sqlKey} = @${tsKey}`)
-            params[tsKey] = patch[tsKey] ?? null
+            const v = patch[tsKey]
+            params[tsKey] = (tsKey === 'percentManual') ? (v ? 1 : 0) : (v ?? null)
           }
         }
         setParts.push(`updated_at = datetime('now')`)

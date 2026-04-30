@@ -37,6 +37,7 @@ export type Task = {
   type:               TaskType
   categoryId:         number | null
   categoryName:       string | null
+  parentTaskId:       number | null
   title:              string
   description:        string | null
   status:             Status
@@ -47,6 +48,7 @@ export type Task = {
   dueDate:            string | null
   completedDate:      string | null
   percentComplete:    number
+  percentManual:      boolean
   notes:              string | null
   createdAt:          string
   updatedAt:          string
@@ -55,6 +57,7 @@ export type Task = {
 export type TaskInput = {
   title:           string
   categoryId:      number | null
+  parentTaskId?:   number | null
   primaryOwner:    string | null
   assignees:       string[]
   tags:            string[]
@@ -62,6 +65,7 @@ export type TaskInput = {
   priority:        Priority | null
   dueDate:         string | null
   percentComplete: number
+  percentManual:   boolean
   description:     string | null
   notes:           string | null
 }

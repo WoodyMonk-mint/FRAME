@@ -2,11 +2,15 @@ import { useEffect, useState } from 'react'
 import type { Assignee, Category, Priority, Status, Task, TaskInput } from '../types'
 import { ALL_PRIORITIES, ALL_STATUSES } from '../types'
 import { todayIso } from '../lib/date'
+import { computeAutoPercent } from '../lib/percent'
 import { TagInput } from './TagInput'
 
 type Props = {
   mode:           'add' | 'edit'
   task?:          Task
+  parent?:        Task          // when adding a subtask
+  childCount?:    number        // when editing a parent
+  autoChildren?:  Task[]        // for displaying live auto value
   categories:     Category[]
   assignees:      Assignee[]
   tagSuggestions: string[]
@@ -24,9 +28,15 @@ const STATUS_LABEL: Record<Status, string> = {
   CANCELLED: 'Cancelled',
 }
 
-export function TaskModal({ mode, task, categories, assignees, tagSuggestions, onCancel, onSave, onDelete }: Props) {
+export function TaskModal({
+  mode, task, parent, childCount = 0, autoChildren = [],
+  categories, assignees, tagSuggestions,
+  onCancel, onSave, onDelete,
+}: Props) {
   const [title, setTitle]                   = useState(task?.title ?? '')
-  const [categoryId, setCategoryId]         = useState<number | null>(task?.categoryId ?? (categories[0]?.id ?? null))
+  const [categoryId, setCategoryId]         = useState<number | null>(
+    task?.categoryId ?? parent?.categoryId ?? (categories[0]?.id ?? null)
+  )
   const [primaryOwner, setPrimaryOwner]     = useState<string | null>(task?.primaryOwner ?? null)
   const [team, setTeam] = useState<string[]>(() => {
     const existing = task?.assignees ?? []
@@ -39,20 +49,23 @@ export function TaskModal({ mode, task, categories, assignees, tagSuggestions, o
   const [priority, setPriority]             = useState<Priority | null>(task?.priority ?? null)
   const [dueDate, setDueDate]               = useState(task?.dueDate ?? '')
   const [percentComplete, setPercentComplete] = useState(task?.percentComplete ?? 0)
+  const [percentManual, setPercentManual]   = useState<boolean>(task?.percentManual ?? false)
   const [description, setDescription]       = useState(task?.description ?? '')
   const [notes, setNotes]                   = useState(task?.notes ?? '')
   const [saving, setSaving]                 = useState(false)
   const [error, setError]                   = useState<string | null>(null)
 
-  // Auto-bump % to 100 when marked done; auto-zero when moved back to planning
+  const hasChildren = childCount > 0
+  const autoValue   = hasChildren ? computeAutoPercent(autoChildren) : 0
+  const sliderEnabled = !hasChildren || percentManual
+
+  // Auto-bump % to 100 when marked done; auto-zero when moved back to planning (add only).
   useEffect(() => {
     if (status === 'DONE' && percentComplete < 100) setPercentComplete(100)
     if (status === 'PLANNING' && percentComplete > 0 && mode === 'add') setPercentComplete(0)
-    // Note: only auto-bump on add; editing keeps user input
   }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-add the primary owner to the team when it changes. Users can still
-  // un-tick the chip if accountability and execution sit with different people.
+  // Auto-add the primary owner to the team when it changes.
   useEffect(() => {
     if (primaryOwner) {
       setTeam(t => t.includes(primaryOwner) ? t : [...t, primaryOwner])
@@ -72,6 +85,9 @@ export function TaskModal({ mode, task, categories, assignees, tagSuggestions, o
     try {
       const wasDone = task?.status === 'DONE'
       const becomingDone = status === 'DONE' && !wasDone
+      // For a parent in auto mode, save the live auto value to keep stored
+      // percent_complete reasonable for analytics; the manual flag stays off.
+      const finalPercent = (hasChildren && !percentManual) ? autoValue : percentComplete
       await onSave({
         title:           title.trim(),
         categoryId,
@@ -81,7 +97,8 @@ export function TaskModal({ mode, task, categories, assignees, tagSuggestions, o
         status,
         priority,
         dueDate:         dueDate || null,
-        percentComplete,
+        percentComplete: finalPercent,
+        percentManual,
         description:     description.trim() || null,
         notes:           notes.trim() || null,
       }, { setCompletedToToday: becomingDone })
@@ -92,11 +109,27 @@ export function TaskModal({ mode, task, categories, assignees, tagSuggestions, o
     }
   }
 
+  const headlineLabel = (() => {
+    if (mode === 'add' && parent) return 'New subtask'
+    if (mode === 'add')           return 'New task'
+    return 'Edit task'
+  })()
+
+  const headlineTitle = (() => {
+    if (mode === 'add')   return parent ? 'Add subtask' : 'Add task'
+    return title || 'Edit task'
+  })()
+
   return (
     <div className="dialog-backdrop" onClick={onCancel}>
       <div className="dialog-card task-modal" onClick={e => e.stopPropagation()}>
-        <p className="panel-label">{mode === 'add' ? 'New task' : 'Edit task'}</p>
-        <h3>{mode === 'add' ? 'Add task' : title || 'Edit task'}</h3>
+        <p className="panel-label">{headlineLabel}</p>
+        <h3>{headlineTitle}</h3>
+        {parent && (
+          <p className="muted compact subtask-context">
+            Subtask of <strong>{parent.title}</strong>
+          </p>
+        )}
 
         {error && <div className="setup-error">{error}</div>}
 
@@ -180,14 +213,34 @@ export function TaskModal({ mode, task, categories, assignees, tagSuggestions, o
           </div>
 
           <div className="form-field">
-            <span>% complete <em className="muted">{percentComplete}%</em></span>
+            <span>
+              % complete{' '}
+              <em className="muted">
+                {sliderEnabled ? `${percentComplete}%` : `${autoValue}% (auto)`}
+              </em>
+            </span>
+            {hasChildren && (
+              <div className="chip-row" style={{ marginBottom: '0.4rem' }}>
+                <button
+                  type="button"
+                  className={`chip ${!percentManual ? 'active' : ''}`}
+                  onClick={() => setPercentManual(false)}
+                >Auto from {childCount} subtask{childCount === 1 ? '' : 's'}</button>
+                <button
+                  type="button"
+                  className={`chip ${percentManual ? 'active' : ''}`}
+                  onClick={() => setPercentManual(true)}
+                >Manual override</button>
+              </div>
+            )}
             <input
               type="range"
               min={0}
               max={100}
               step={5}
-              value={percentComplete}
+              value={sliderEnabled ? percentComplete : autoValue}
               onChange={e => setPercentComplete(Number(e.target.value))}
+              disabled={!sliderEnabled}
             />
           </div>
 
@@ -211,7 +264,7 @@ export function TaskModal({ mode, task, categories, assignees, tagSuggestions, o
               Cancel
             </button>
             <button type="submit" className="primary-button" disabled={saving}>
-              {saving ? 'Saving…' : (mode === 'add' ? 'Add task' : 'Save')}
+              {saving ? 'Saving…' : (mode === 'add' ? (parent ? 'Add subtask' : 'Add task') : 'Save')}
             </button>
           </div>
           <p className="muted compact" style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
