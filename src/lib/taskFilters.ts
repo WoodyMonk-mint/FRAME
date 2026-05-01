@@ -34,6 +34,28 @@ export const DEFAULT_FILTERS: TaskFilters = {
   sortDir:             null,
 }
 
+// Quick filter presets driven from the Dashboard's summary cards.
+// Each card on the Dashboard maps to one of these and the Task List
+// applies it on first render after the navigation event.
+export type QuickFilterPreset = 'all-open' | 'overdue' | 'this-week' | 'blocked'
+
+export function presetToFilters(preset: QuickFilterPreset): TaskFilters {
+  switch (preset) {
+    case 'all-open':
+      return { ...DEFAULT_FILTERS }
+    case 'overdue':
+      return { ...DEFAULT_FILTERS, dueRange: 'overdue' }
+    case 'this-week':
+      return { ...DEFAULT_FILTERS, dueRange: 'this-week' }
+    case 'blocked':
+      // Show only BLOCKED tasks: exclude every other status.
+      return {
+        ...DEFAULT_FILTERS,
+        excludedStatuses: (['PLANNING', 'WIP', 'ON_HOLD', 'DONE', 'CANCELLED'] as Status[]),
+      }
+  }
+}
+
 // Older presets in localStorage may pre-date the sort fields; backfill them
 // rather than leaving undefined values that break the predicate.
 export function withDefaults(f: Partial<TaskFilters>): TaskFilters {

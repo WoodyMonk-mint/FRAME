@@ -32,6 +32,9 @@ declare global {
     listAssignees:   () => Promise<import('./types').Assignee[]>
     listTags:        () => Promise<string[]>
     listTaskHistory: (taskId: number) => Promise<import('./types').TaskHistoryEntry[]>
+    takeSnapshot:    (snapshotDate?: string) =>
+      Promise<{ ok: boolean; snapshotDate?: string; taskCount?: number; error?: string }>
+    listOverdueTrend: (monthsBack?: number) => Promise<import('./types').OverdueTrendPoint[]>
     createTask:      (input: import('./types').TaskInput) => Promise<{ ok: boolean; task?: import('./types').Task; error?: string }>
     updateTask:      (id: number, patch: import('./types').TaskPatch) => Promise<{ ok: boolean; task?: import('./types').Task; error?: string }>
     softDeleteTask:  (id: number) => Promise<{ ok: boolean; error?: string }>

@@ -481,6 +481,31 @@ function openAndValidateDb() {
   runMigrations()
   seedDatabase()
 
+  // Auto-snapshot on launch — idempotent per snapshot_date so re-launching
+  // the same day just refreshes today's row. Gives the trend chart at least
+  // one data point per day the app is opened.
+  try {
+    const today = new Date().toISOString().slice(0, 10)
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM task_snapshots WHERE snapshot_date = ?').run(today)
+      const ins = db.prepare(`
+        INSERT INTO task_snapshots (snapshot_date, task_id, status, percent_complete, due_date, primary_owner)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      const rows = db.prepare(`
+        SELECT id, status, percent_complete, due_date, primary_owner
+        FROM tasks
+        WHERE is_deleted = 0
+      `).all()
+      for (const r of rows) {
+        ins.run(today, r.id, r.status, r.percent_complete ?? 0, r.due_date, r.primary_owner)
+      }
+    })
+    tx()
+  } catch (err) {
+    console.warn('[DB] Auto-snapshot failed:', err.message)
+  }
+
   console.log('[DB] Opened and validated:', dbPath)
 }
 
@@ -742,6 +767,62 @@ function registerIpcHandlers() {
       assigneesByTaskId[r.id] ?? [],
       tagsByTaskId[r.id] ?? [],
     ))
+  })
+
+  // Snapshots — periodic point-in-time copies of tasks, used for trend
+  // charts (overdue count over time, etc). Idempotent per (snapshot_date,
+  // task_id): re-running for today's date overwrites today's rows.
+  ipcMain.handle('db:take-snapshot', (_event, snapshotDate) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const date = String(snapshotDate ?? new Date().toISOString().slice(0, 10))
+      let count = 0
+      const tx = db.transaction(() => {
+        db.prepare('DELETE FROM task_snapshots WHERE snapshot_date = ?').run(date)
+        const ins = db.prepare(`
+          INSERT INTO task_snapshots (snapshot_date, task_id, status, percent_complete, due_date, primary_owner)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `)
+        const rows = db.prepare(`
+          SELECT id, status, percent_complete, due_date, primary_owner
+          FROM tasks
+          WHERE is_deleted = 0
+        `).all()
+        for (const r of rows) {
+          ins.run(date, r.id, r.status, r.percent_complete ?? 0, r.due_date, r.primary_owner)
+        }
+        count = rows.length
+      })
+      tx()
+      return { ok: true, snapshotDate: date, taskCount: count }
+    } catch (err) {
+      console.error('[DB] take-snapshot failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:list-overdue-trend', (_event, monthsBack) => {
+    if (!db) return []
+    const months = Math.max(1, Math.min(36, Number(monthsBack) || 6))
+    const rows = db.prepare(`
+      SELECT
+        snapshot_date,
+        SUM(CASE
+              WHEN due_date IS NOT NULL
+                AND due_date < snapshot_date
+                AND status NOT IN ('DONE','CANCELLED')
+              THEN 1 ELSE 0 END) AS overdue_count,
+        SUM(CASE WHEN status NOT IN ('DONE','CANCELLED') THEN 1 ELSE 0 END) AS open_count
+      FROM task_snapshots
+      WHERE snapshot_date >= date('now', ?)
+      GROUP BY snapshot_date
+      ORDER BY snapshot_date
+    `).all(`-${months} months`)
+    return rows.map(r => ({
+      date:         r.snapshot_date,
+      overdueCount: r.overdue_count,
+      openCount:    r.open_count,
+    }))
   })
 
   ipcMain.handle('db:list-task-history', (_event, taskId) => {

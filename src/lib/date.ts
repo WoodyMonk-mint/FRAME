@@ -6,10 +6,21 @@ export function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
+// Weekend-aware "today" for overdue calculations: on a Saturday or Sunday
+// we step back to Friday so a task due Friday isn't flagged "overdue" until
+// Monday rolls around.
+function effectiveTodayForOverdue(): string {
+  const d = new Date()
+  const day = d.getDay() // 0 = Sunday, 6 = Saturday
+  if (day === 6) d.setDate(d.getDate() - 1) // Sat → Fri
+  if (day === 0) d.setDate(d.getDate() - 2) // Sun → Fri
+  return d.toISOString().slice(0, 10)
+}
+
 export function isOverdue(dueDate: string | null, status: Status): boolean {
   if (!dueDate) return false
   if (status === 'DONE' || status === 'CANCELLED') return false
-  return dueDate < todayIso()
+  return dueDate < effectiveTodayForOverdue()
 }
 
 export function formatDate(iso: string | null): string {

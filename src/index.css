@@ -6364,6 +6364,84 @@ kbd {
 }
 .blocking-link:hover { text-decoration: underline; }
 
+.dashboard-grid {
+  padding: 0 2rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 80rem;
+}
+.dashboard-card-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.75rem;
+}
+.dashboard-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.dashboard-card-value {
+  font-size: 1.8rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  line-height: 1;
+}
+.dashboard-card-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.dashboard-card-danger {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.06);
+}
+.dashboard-card-danger .dashboard-card-value { color: #fca5a5; }
+[data-theme="light"] .dashboard-card-danger .dashboard-card-value { color: #b91c1c; }
+.dashboard-card-warn {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.06);
+}
+.dashboard-card-warn .dashboard-card-value { color: #fcd34d; }
+[data-theme="light"] .dashboard-card-warn .dashboard-card-value { color: #b45309; }
+
+button.dashboard-card.dashboard-card-clickable {
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  transition: background 0.12s, border-color 0.12s, transform 0.05s;
+}
+button.dashboard-card.dashboard-card-clickable:hover {
+  background: var(--surface-raised);
+}
+button.dashboard-card.dashboard-card-clickable:active {
+  transform: translateY(1px);
+}
+
+.dashboard-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: 0.75rem;
+}
+.dashboard-chart-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.85rem 1rem;
+}
+.dashboard-chart-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+  color: var(--text);
+}
+
 .workflow-step-row {
   cursor: pointer;
   transition: background 0.1s, opacity 0.1s;

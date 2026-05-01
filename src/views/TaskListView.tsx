@@ -18,10 +18,13 @@ import type { DueRange } from '../lib/date'
 import { formatDate, isInDueRange, isOverdue, todayIso } from '../lib/date'
 import { effectivePercent, openSubtaskCount } from '../lib/percent'
 import { tasksToCsv } from '../lib/csv'
-import type { SortColumn, TaskFilters, TaskFilterPreset } from '../lib/taskFilters'
+import type {
+  QuickFilterPreset, SortColumn, TaskFilters, TaskFilterPreset,
+} from '../lib/taskFilters'
 import {
   DEFAULT_FILTERS,
   passesFilters,
+  presetToFilters,
   loadPresets, savePresets,
   getDefaultPresetId, setDefaultPresetId,
 } from '../lib/taskFilters'
@@ -84,10 +87,14 @@ function passesWorkflowFilters(i: WorkflowInstance, f: TaskFilters): boolean {
 }
 
 type TaskListProps = {
-  onOpenWorkflow?: (id: number) => void
+  onOpenWorkflow?:         (id: number) => void
+  pendingFilter?:          QuickFilterPreset | null
+  onPendingFilterApplied?: () => void
 }
 
-export function TaskListView({ onOpenWorkflow }: TaskListProps = {}) {
+export function TaskListView({
+  onOpenWorkflow, pendingFilter, onPendingFilterApplied,
+}: TaskListProps = {}) {
   const [tasks, setTasks]           = useState<Task[]>([])
   const [workflows, setWorkflows]   = useState<WorkflowInstance[]>([])
   const [templates, setTemplates]   = useState<WorkflowTemplate[]>([])
@@ -190,6 +197,16 @@ export function TaskListView({ onOpenWorkflow }: TaskListProps = {}) {
     })()
     return () => { cancelled = true }
   }, [])
+
+  // When the user clicks a Dashboard card, App passes a QuickFilterPreset
+  // through. Apply it once, then ask App to clear so navigating back doesn't
+  // re-apply.
+  useEffect(() => {
+    if (!pendingFilter) return
+    setFiltersState(presetToFilters(pendingFilter))
+    setActivePresetId(null)
+    onPendingFilterApplied?.()
+  }, [pendingFilter, onPendingFilterApplied])
 
   // Manual filter mutations clear the active preset id (the user has diverged
   // from the named view). Preset applies use setFiltersState directly.

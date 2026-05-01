@@ -28,6 +28,8 @@ try {
       listAssignees:   ()              => ipcRenderer.invoke('db:list-assignees'),
       listTags:        ()              => ipcRenderer.invoke('db:list-tags'),
       listTaskHistory: (taskId)        => ipcRenderer.invoke('db:list-task-history', taskId),
+      takeSnapshot:    (snapshotDate)  => ipcRenderer.invoke('db:take-snapshot', snapshotDate),
+      listOverdueTrend: (monthsBack)   => ipcRenderer.invoke('db:list-overdue-trend', monthsBack),
       createTask:      (input)         => ipcRenderer.invoke('db:create-task', input),
       updateTask:      (id, patch)     => ipcRenderer.invoke('db:update-task', id, patch),
       softDeleteTask:  (id)            => ipcRenderer.invoke('db:soft-delete-task', id),

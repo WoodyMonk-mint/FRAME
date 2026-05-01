@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ViewDef, ViewId } from './types'
+import { DashboardView } from './views/DashboardView'
 import { RecurringView } from './views/RecurringView'
 import { TaskListView } from './views/TaskListView'
 import { WorkflowsView } from './views/WorkflowsView'
@@ -12,7 +13,7 @@ const VIEWS: ViewDef[] = [
   { id: 'workflows', label: 'Workflows' },
   { id: 'recurring', label: 'Recurring' },
   { id: 'my-work',   label: 'My Work',   iterationNote: 'Coming in Iteration 9 — personal task view filtered to the active user.' },
-  { id: 'dashboard', label: 'Dashboard', iterationNote: 'Coming in Iteration 6 — summary cards and charts.' },
+  { id: 'dashboard', label: 'Dashboard' },
   { id: 'calendar',  label: 'Calendar',  iterationNote: 'Coming in Iteration 7 — month/week view with task blocks.' },
   { id: 'settings',  label: 'Settings',  iterationNote: 'Coming in Iteration 9 — taxonomy management with unlock-to-edit.' },
 ]
@@ -24,6 +25,11 @@ function App() {
   // Lifted so other views (e.g. Task List) can navigate to a specific
   // workflow by setting both the active view and the selected instance.
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<number | null>(null)
+  // Pending filter from the Dashboard cards. Set by DashboardView, consumed
+  // and cleared by TaskListView when it mounts / receives the prop.
+  const [pendingTaskFilter, setPendingTaskFilter] = useState<
+    import('./lib/taskFilters').QuickFilterPreset | null
+  >(null)
 
   const refreshStatus = async () => {
     if (!window.frame?.db) return
@@ -86,6 +92,8 @@ function App() {
               setSelectedWorkflowId(id)
               setActiveView('workflows')
             }}
+            pendingFilter={pendingTaskFilter}
+            onPendingFilterApplied={() => setPendingTaskFilter(null)}
           />
         ) : view.id === 'workflows' ? (
           <WorkflowsView
@@ -95,6 +103,13 @@ function App() {
           />
         ) : view.id === 'recurring' ? (
           <RecurringView />
+        ) : view.id === 'dashboard' ? (
+          <DashboardView
+            onJumpToTasks={(preset) => {
+              setPendingTaskFilter(preset)
+              setActiveView('tasks')
+            }}
+          />
         ) : (
           <>
             <header className="view-header">

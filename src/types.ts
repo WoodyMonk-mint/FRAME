@@ -97,6 +97,12 @@ export type TaskHistoryEntry = {
   createdAt:  string
 }
 
+export type OverdueTrendPoint = {
+  date:          string
+  overdueCount:  number
+  openCount:     number
+}
+
 // ─── Workflows ──────────────────────────────────────────────────────────────
 
 export type WorkflowTemplate = {
