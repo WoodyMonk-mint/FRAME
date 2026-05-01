@@ -20,8 +20,8 @@ export function ConfirmDialog({
   onConfirm,
 }: Props) {
   return (
-    <div className="dialog-backdrop" onClick={onCancel}>
-      <div className="dialog-card" onClick={e => e.stopPropagation()}>
+    <div className="dialog-backdrop">
+      <div className="dialog-card">
         <p className="panel-label">{label}</p>
         <h3>{title}</h3>
         <p className="muted compact">{body}</p>

@@ -82,7 +82,11 @@ function passesWorkflowFilters(i: WorkflowInstance, f: TaskFilters): boolean {
   return true
 }
 
-export function TaskListView() {
+type TaskListProps = {
+  onOpenWorkflow?: (id: number) => void
+}
+
+export function TaskListView({ onOpenWorkflow }: TaskListProps = {}) {
   const [tasks, setTasks]           = useState<Task[]>([])
   const [workflows, setWorkflows]   = useState<WorkflowInstance[]>([])
   const [templates, setTemplates]   = useState<WorkflowTemplate[]>([])
@@ -113,6 +117,8 @@ export function TaskListView() {
 
   // Right-click context menu on task rows.
   const [ctxMenu, setCtxMenu] = useState<{ task: Task; x: number; y: number } | null>(null)
+  // Separate menu for workflow rows (different action set, no Task type).
+  const [wfCtxMenu, setWfCtxMenu] = useState<{ instance: WorkflowInstance; x: number; y: number } | null>(null)
 
   const reload = async () => {
     setError(null)
@@ -249,7 +255,16 @@ export function TaskListView() {
   // ─── Derived data ────────────────────────────────────────────────────────
 
   // Subtasks of regular tasks (parent_task_id linkage). Used for parent-task
-  // nesting and the auto-percent calculation.
+  // nesting and the auto-percent calculation. Children are sorted by
+  // sort_order (when set) then created_at so user-reordered checklists keep
+  // their position; older subtasks without sort_order fall back gracefully.
+  const sortChildren = (a: Task, b: Task): number => {
+    const ao = a.sortOrder, bo = b.sortOrder
+    if (ao != null && bo != null) return ao - bo
+    if (ao != null) return -1
+    if (bo != null) return 1
+    return a.createdAt.localeCompare(b.createdAt)
+  }
   const allChildrenByParent = useMemo(() => {
     const m = new Map<number, Task[]>()
     for (const t of tasks) {
@@ -259,6 +274,7 @@ export function TaskListView() {
         m.set(t.parentTaskId, arr)
       }
     }
+    for (const arr of m.values()) arr.sort(sortChildren)
     return m
   }, [tasks])
 
@@ -271,6 +287,7 @@ export function TaskListView() {
         m.set(t.parentTaskId, arr)
       }
     }
+    for (const arr of m.values()) arr.sort(sortChildren)
     return m
   }, [tasks, filters])
 
@@ -300,10 +317,16 @@ export function TaskListView() {
   }, [stepsByWorkflowId, filters])
 
   // The unified row list: real top-level tasks + synthetic workflow rows.
+  // Recurrence templates are hidden from the Task List — they live in the
+  // Recurring view. Their occurrences (recurrenceTemplateId set) appear here.
   const topRows = useMemo<TopRow[]>(() => {
     const rows: TopRow[] = []
     for (const t of tasks) {
-      if (t.parentTaskId === null && t.workflowInstanceId === null && passesFilters(t, filters)) {
+      const isRecurrenceTemplate = t.recurrenceUnit !== null && t.recurrenceTemplateId === null
+      if (t.parentTaskId === null
+          && t.workflowInstanceId === null
+          && !isRecurrenceTemplate
+          && passesFilters(t, filters)) {
         rows.push({ kind: 'task', task: t })
       }
     }
@@ -333,7 +356,11 @@ export function TaskListView() {
   }
 
   const totalTopLevelTasks = useMemo(
-    () => tasks.filter(t => t.parentTaskId === null && t.workflowInstanceId === null).length,
+    () => tasks.filter(t =>
+      t.parentTaskId === null
+      && t.workflowInstanceId === null
+      && !(t.recurrenceUnit !== null && t.recurrenceTemplateId === null)
+    ).length,
     [tasks]
   )
 
@@ -420,7 +447,18 @@ export function TaskListView() {
     await reload()
   }
 
-  const markDone = async (task: Task, completedDate: string, note: string) => {
+  const markDone = async (task: Task, completedDate: string, note: string, createNext?: boolean) => {
+    // Recurring occurrence completion is atomic — mark done + (optionally)
+    // create next occurrence in one transaction.
+    if (task.recurrenceTemplateId !== null) {
+      const r = await window.frame.db.completeRecurringOccurrence(
+        task.id, completedDate, note || null, !!createNext,
+      )
+      setConfirmDone(null)
+      if (!r.ok) { setError(r.error ?? 'Update failed'); return }
+      await reload()
+      return
+    }
     const patch: Parameters<typeof window.frame.db.updateTask>[1] = {
       status:          'DONE',
       completedDate,
@@ -681,6 +719,7 @@ export function TaskListView() {
             <thead>
               <tr>
                 <SortTh col="category" sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="11rem">Category</SortTh>
+                <th style={{ width: '5.5rem' }}>Type</th>
                 <SortTh col="title"    sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort}>Title</SortTh>
                 <SortTh col="status"   sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="7rem">Status</SortTh>
                 <SortTh col="percent"  sortBy={filters.sortBy} sortDir={filters.sortDir} onClick={cycleSort} width="7.5rem">%</SortTh>
@@ -699,7 +738,7 @@ export function TaskListView() {
                   <Fragment key={g.key}>
                     {showHeader && (
                       <tr className="group-header" onClick={() => toggleGroup(g.key)}>
-                        <td colSpan={9}>
+                        <td colSpan={10}>
                           <span className={`group-header-chevron ${collapsed ? '' : 'group-header-chevron-open'}`}>▶</span>
                           <span className="group-header-label">{g.label}</span>
                           <span className="group-header-count muted">({g.rows.length})</span>
@@ -722,6 +761,8 @@ export function TaskListView() {
                             onOpen={(target) => setModal({ kind: 'edit', task: target })}
                             onAddSubtask={() => setModal({ kind: 'add-subtask', parent: t })}
                             onContextMenu={(target, x, y) => setCtxMenu({ task: target, x, y })}
+                            onReload={reload}
+                            onError={(msg) => setError(msg)}
                           />
                         )
                       }
@@ -738,6 +779,7 @@ export function TaskListView() {
                           onToggle={() => toggleWorkflowExpand(inst.id)}
                           onOpenStep={(target) => setModal({ kind: 'edit', task: target })}
                           onContextMenu={(target, x, y) => setCtxMenu({ task: target, x, y })}
+                          onWorkflowContextMenu={(workflow, x, y) => setWfCtxMenu({ instance: workflow, x, y })}
                         />
                       )
                     })}
@@ -785,8 +827,13 @@ export function TaskListView() {
       {confirmDone && (
         <MarkDoneDialog
           taskTitle={confirmDone.title}
+          autoCreateNext={
+            confirmDone.recurrenceTemplateId !== null
+              ? (confirmDone.autoCreateNext ?? true)
+              : undefined
+          }
           onCancel={() => setConfirmDone(null)}
-          onConfirm={(date, note) => markDone(confirmDone, date, note)}
+          onConfirm={(date, note, createNext) => markDone(confirmDone, date, note, createNext)}
         />
       )}
 
@@ -805,6 +852,26 @@ export function TaskListView() {
           }}
         />
       )}
+
+      {wfCtxMenu && (() => {
+        const inst = wfCtxMenu.instance
+        const expanded = expandedWorkflowIds.has(inst.id)
+        const items: ContextMenuItem[] = [
+          { kind: 'item', label: 'Open workflow…',
+            disabled: !onOpenWorkflow,
+            onSelect: () => onOpenWorkflow?.(inst.id) },
+          { kind: 'item', label: expanded ? 'Collapse steps' : 'Expand steps',
+            onSelect: () => toggleWorkflowExpand(inst.id) },
+        ]
+        return (
+          <ContextMenu
+            x={wfCtxMenu.x}
+            y={wfCtxMenu.y}
+            items={items}
+            onClose={() => setWfCtxMenu(null)}
+          />
+        )
+      })()}
 
       {ctxMenu && (() => {
         const t       = ctxMenu.task
@@ -976,7 +1043,7 @@ function SortTh({
 
 function RowGroup({
   task, children, isExpanded, categoryColour,
-  onToggle, onOpen, onAddSubtask, onContextMenu,
+  onToggle, onOpen, onAddSubtask, onContextMenu, onReload, onError,
 }: {
   task:           Task
   children:       Task[]
@@ -986,10 +1053,15 @@ function RowGroup({
   onOpen:         (t: Task) => void
   onAddSubtask:   () => void
   onContextMenu:  (t: Task, x: number, y: number) => void
+  onReload:       () => Promise<void> | void
+  onError:        (msg: string) => void
 }) {
   const hasChildren = children.length > 0
   const displayPercent = effectivePercent(task, children)
   const isAuto = hasChildren && !task.percentManual
+
+  // Subtask DnD state — scoped per parent so concurrent drags can't collide.
+  const [subDrag, setSubDrag] = useState<{ from: number; over: number | null } | null>(null)
 
   return (
     <>
@@ -1004,22 +1076,55 @@ function RowGroup({
         onContextMenu={(x, y) => onContextMenu(task, x, y)}
         displayPercent={displayPercent}
       />
-      {isExpanded && children.map(c => (
-        <TaskRow
-          key={c.id}
-          task={c}
-          depth={1}
-          canExpand={false}
-          isExpanded={false}
-          onToggle={() => {}}
-          categoryColour={categoryColour}
-          onOpen={() => onOpen(c)}
-          onContextMenu={(x, y) => onContextMenu(c, x, y)}
-          displayPercent={c.percentComplete}
-        />
-      ))}
+      {isExpanded && children.map((c, i) => {
+        const dragging = subDrag?.from === i
+        const dragOver = subDrag?.over === i && subDrag.from !== i
+        return (
+          <TaskRow
+            key={c.id}
+            task={c}
+            depth={1}
+            canExpand={false}
+            isExpanded={false}
+            onToggle={() => {}}
+            categoryColour={categoryColour}
+            onOpen={() => onOpen(c)}
+            onContextMenu={(x, y) => onContextMenu(c, x, y)}
+            displayPercent={c.percentComplete}
+            draggable
+            isDragging={dragging}
+            isDragOver={dragOver}
+            onDragStart={e => {
+              setSubDrag({ from: i, over: null })
+              e.dataTransfer.effectAllowed = 'move'
+              e.dataTransfer.setData('text/plain', `sub:${i}`)
+            }}
+            onDragOver={e => {
+              if (!subDrag) return
+              e.preventDefault()
+              e.dataTransfer.dropEffect = 'move'
+              if (subDrag.over !== i) setSubDrag({ ...subDrag, over: i })
+            }}
+            onDragEnd={() => setSubDrag(null)}
+            onDrop={async e => {
+              e.preventDefault()
+              const from = subDrag?.from
+              setSubDrag(null)
+              if (from == null || from === i) return
+              const next = [...children]
+              const [moved] = next.splice(from, 1)
+              next.splice(i, 0, moved)
+              const orderedIds = next.map(x => x.id)
+              const r = await window.frame.db.reorderChecklist(task.id, orderedIds)
+              if (!r.ok) onError(r.error ?? 'Reorder failed')
+              await onReload()
+            }}
+          />
+        )
+      })}
       {isExpanded && (
         <tr className="add-subtask-row">
+          <td></td>
           <td></td>
           <td colSpan={8}>
             <button type="button" className="add-subtask-btn" onClick={onAddSubtask}>
@@ -1039,15 +1144,16 @@ function RowGroup({
 
 function WorkflowRowGroup({
   instance, steps, isExpanded, categoryColour,
-  onToggle, onOpenStep, onContextMenu,
+  onToggle, onOpenStep, onContextMenu, onWorkflowContextMenu,
 }: {
-  instance:       WorkflowInstance
-  steps:          Task[]
-  isExpanded:     boolean
-  categoryColour: string | null
-  onToggle:       () => void
-  onOpenStep:     (t: Task) => void
-  onContextMenu:  (t: Task, x: number, y: number) => void
+  instance:              WorkflowInstance
+  steps:                 Task[]
+  isExpanded:            boolean
+  categoryColour:        string | null
+  onToggle:              () => void
+  onOpenStep:            (t: Task) => void
+  onContextMenu:         (t: Task, x: number, y: number) => void
+  onWorkflowContextMenu: (i: WorkflowInstance, x: number, y: number) => void
 }) {
   const status = isKnownStatus(instance.status) ? instance.status : 'WIP'
   const overdue = isOverdue(instance.targetDate, status)
@@ -1061,6 +1167,7 @@ function WorkflowRowGroup({
       <tr
         className="task-row task-row-workflow"
         onClick={onToggle}
+        onContextMenu={e => { e.preventDefault(); onWorkflowContextMenu(instance, e.clientX, e.clientY) }}
       >
         <td>
           <span className="category-cell">
@@ -1068,6 +1175,7 @@ function WorkflowRowGroup({
             <span className="category-name">{instance.categoryName ?? instance.templateName ?? '—'}</span>
           </span>
         </td>
+        <td><span className="type-badge type-badge-workflow">Workflow</span></td>
         <td className="task-title-cell">
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
             <button
@@ -1076,7 +1184,6 @@ function WorkflowRowGroup({
               onClick={e => { e.stopPropagation(); onToggle() }}
               aria-label={isExpanded ? 'Collapse workflow' : 'Expand workflow'}
             >▶</button>
-            <span className="workflow-row-badge">Workflow</span>
             <strong>{instance.name}</strong>
             {titleSuffix && <span className="muted compact">{titleSuffix}</span>}
           </span>
@@ -1133,6 +1240,8 @@ function TaskRow({
   task, depth, canExpand, isExpanded, onToggle,
   categoryColour, onOpen, onContextMenu,
   displayPercent, stepNumber,
+  draggable, isDragging, isDragOver,
+  onDragStart, onDragOver, onDragEnd, onDrop,
 }: {
   task:            Task
   depth:           number
@@ -1144,16 +1253,39 @@ function TaskRow({
   onContextMenu:   (x: number, y: number) => void
   displayPercent:  number
   stepNumber?:     number | null
+  draggable?:      boolean
+  isDragging?:     boolean
+  isDragOver?:     boolean
+  onDragStart?:    React.DragEventHandler<HTMLTableRowElement>
+  onDragOver?:     React.DragEventHandler<HTMLTableRowElement>
+  onDragEnd?:      React.DragEventHandler<HTMLTableRowElement>
+  onDrop?:         React.DragEventHandler<HTMLTableRowElement>
 }) {
   const overdue = isOverdue(task.dueDate, task.status)
   const isDone  = task.status === 'DONE'
   const isSubtask = depth > 0
 
+  const className = [
+    'task-row',
+    isDone     ? 'task-row-done'      : '',
+    isSubtask  ? 'task-row-subtask'   : '',
+    isDragging ? 'task-row-dragging'  : '',
+    isDragOver ? 'task-row-drag-over' : '',
+  ].filter(Boolean).join(' ')
+
   return (
     <tr
-      className={`task-row ${isDone ? 'task-row-done' : ''} ${isSubtask ? 'task-row-subtask' : ''}`}
-      onClick={onOpen}
+      className={className}
+      // Match the workflow-row pattern: clicking a parent row toggles its
+      // children. Leaf rows (no children) open the edit modal. Right-click
+      // → Open is the explicit edit affordance for parents.
+      onClick={canExpand ? onToggle : onOpen}
       onContextMenu={e => { e.preventDefault(); onContextMenu(e.clientX, e.clientY) }}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragEnd={onDragEnd}
+      onDrop={onDrop}
     >
       <td>
         {!isSubtask && (
@@ -1163,8 +1295,22 @@ function TaskRow({
           </span>
         )}
       </td>
+      <td>
+        {!isSubtask && (
+          task.recurrenceTemplateId != null
+            ? <span className="type-badge type-badge-recurring">Recurring</span>
+            : <span className="type-badge type-badge-task">Task</span>
+        )}
+      </td>
       <td className="task-title-cell">
         <span style={{ paddingLeft: `${depth * 1.25}rem`, display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+          {draggable && (
+            <span
+              className="task-drag-handle"
+              title="Drag to reorder"
+              onClick={e => e.stopPropagation()}
+            >⋮⋮</span>
+          )}
           {canExpand ? (
             <button
               type="button"
@@ -1173,7 +1319,7 @@ function TaskRow({
               aria-label={isExpanded ? 'Collapse subtasks' : 'Expand subtasks'}
             >▶</button>
           ) : (
-            isSubtask
+            isSubtask && !draggable
               ? <span className="subtask-rail" aria-hidden>↳</span>
               : <span className="expand-chevron expand-chevron-spacer" aria-hidden></span>
           )}

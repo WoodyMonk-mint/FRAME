@@ -154,8 +154,8 @@ export function WorkflowDialog(props: Props) {
   }
 
   return (
-    <div className="dialog-backdrop" onClick={props.onCancel}>
-      <div className="dialog-card task-modal" onClick={e => e.stopPropagation()}>
+    <div className="dialog-backdrop">
+      <div className="dialog-card task-modal">
         <p className="panel-label">{isEdit ? 'Edit workflow' : 'New workflow'}</p>
         <h3>{isEdit ? (initialInstance?.name ?? 'Edit workflow') : 'Start a workflow'}</h3>
 

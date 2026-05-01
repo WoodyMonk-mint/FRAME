@@ -1,6 +1,9 @@
 // FRAME shared renderer types
 
-export type ViewId = 'tasks' | 'workflows' | 'my-work' | 'dashboard' | 'calendar' | 'settings'
+export type ViewId = 'tasks' | 'workflows' | 'recurring' | 'my-work' | 'dashboard' | 'calendar' | 'settings'
+
+export type RecurrenceUnit = 'day' | 'week' | 'month' | 'year'
+export const RECURRENCE_UNITS: RecurrenceUnit[] = ['day', 'week', 'month', 'year']
 
 export type ViewDef = {
   id:             ViewId
@@ -33,14 +36,19 @@ export type Assignee = {
 }
 
 export type Task = {
-  id:                 number
-  type:               TaskType
-  categoryId:         number | null
-  categoryName:       string | null
-  parentTaskId:       number | null
-  workflowInstanceId: number | null
-  workflowStepNumber: number | null
-  title:              string
+  id:                   number
+  type:                 TaskType
+  categoryId:           number | null
+  categoryName:         string | null
+  parentTaskId:         number | null
+  workflowInstanceId:   number | null
+  workflowStepNumber:   number | null
+  recurrenceTemplateId: number | null
+  recurrenceUnit:       RecurrenceUnit | null
+  recurrenceInterval:   number | null
+  autoCreateNext:       boolean | null
+  sortOrder:            number | null
+  title:                string
   description:        string | null
   status:             Status
   priority:           Priority | null
@@ -168,6 +176,48 @@ export type WorkflowNote = {
   author:     string | null
   createdAt:  string
 }
+
+// ─── Recurring tasks ────────────────────────────────────────────────────────
+
+export type RecurrenceTemplateSummary = {
+  template:         Task            // the template row (recurrence_template_id IS NULL)
+  totalOccurrences: number
+  doneOccurrences:  number
+  nextOpenDue:      string | null   // earliest due date among open occurrences
+  lastCompleted:    string | null   // most recent completed_date
+}
+
+export type RecurrenceTemplateDetail = {
+  template:    Task
+  occurrences: Task[]
+}
+
+export type NewSubtaskTemplateInput = {
+  title:         string
+  description?:  string | null
+  priority?:     Priority | null
+  primaryOwner?: string | null
+}
+
+export type NewRecurrenceInput = {
+  title:               string
+  description?:        string | null
+  categoryId?:         number | null
+  priority?:           Priority | null
+  primaryOwner?:       string | null
+  assignees?:          string[]
+  tags?:               string[]
+  dueDate:             string         // first occurrence due date — required
+  recurrenceUnit:      RecurrenceUnit
+  recurrenceInterval:  number
+  recurrenceAnchor?:   string | null
+  recurrenceType?:     string | null
+  autoCreateNext?:     boolean
+  notes?:              string | null
+  subtasks?:           NewSubtaskTemplateInput[]
+}
+
+export type RecurrencePatch = Partial<NewRecurrenceInput>
 
 export type WorkflowInstanceDetail = {
   instance: WorkflowInstance

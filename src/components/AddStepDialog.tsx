@@ -42,8 +42,8 @@ export function AddStepDialog({ assignees, onCancel, onSubmit }: Props) {
   }
 
   return (
-    <div className="dialog-backdrop" onClick={onCancel}>
-      <div className="dialog-card task-modal" onClick={e => e.stopPropagation()}>
+    <div className="dialog-backdrop">
+      <div className="dialog-card task-modal">
         <p className="panel-label">New step</p>
         <h3>Add an ad-hoc step</h3>
         <p className="muted compact" style={{ marginBottom: '0.5rem' }}>

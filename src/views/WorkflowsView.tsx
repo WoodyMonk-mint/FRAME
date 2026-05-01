@@ -4,12 +4,17 @@ import { formatDate } from '../lib/date'
 import { WorkflowDialog } from '../components/WorkflowDialog'
 import { WorkflowDetailView } from './WorkflowDetailView'
 
-export function WorkflowsView() {
-  const [selectedId, setSelectedId] = useState<number | null>(null)
+type Props = {
+  selectedId: number | null
+  onSelect:   (id: number) => void
+  onBack:     () => void
+}
+
+export function WorkflowsView({ selectedId, onSelect, onBack }: Props) {
   if (selectedId !== null) {
-    return <WorkflowDetailView instanceId={selectedId} onBack={() => setSelectedId(null)} />
+    return <WorkflowDetailView instanceId={selectedId} onBack={onBack} />
   }
-  return <WorkflowsList onSelect={setSelectedId} />
+  return <WorkflowsList onSelect={onSelect} />
 }
 
 function WorkflowsList({ onSelect }: { onSelect: (id: number) => void }) {

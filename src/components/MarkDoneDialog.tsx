@@ -3,16 +3,22 @@ import { todayIso } from '../lib/date'
 
 type Props = {
   taskTitle: string
+  // When provided, an extra "Create next occurrence?" tickbox is shown,
+  // pre-set to this default. The boolean comes back as the 3rd arg to
+  // onConfirm. Omit for non-recurring tasks.
+  autoCreateNext?: boolean
   onCancel:  () => void
-  onConfirm: (completedDate: string, note: string) => void
+  onConfirm: (completedDate: string, note: string, createNext?: boolean) => void
 }
 
-export function MarkDoneDialog({ taskTitle, onCancel, onConfirm }: Props) {
+export function MarkDoneDialog({ taskTitle, autoCreateNext, onCancel, onConfirm }: Props) {
   const [completedDate, setCompletedDate] = useState(todayIso())
-  const [note, setNote] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
+  const [note, setNote]                   = useState('')
+  const [createNext, setCreateNext]       = useState<boolean>(autoCreateNext ?? false)
+  const [error, setError]                 = useState<string | null>(null)
+  const [submitting, setSubmitting]       = useState(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
+  const showCreateNext = autoCreateNext !== undefined
 
   useEffect(() => { taRef.current?.focus() }, [])
 
@@ -21,12 +27,12 @@ export function MarkDoneDialog({ taskTitle, onCancel, onConfirm }: Props) {
     if (submitting) return
     if (!completedDate) { setError('Completion date is required.'); return }
     setSubmitting(true)
-    onConfirm(completedDate, note.trim())
+    onConfirm(completedDate, note.trim(), showCreateNext ? createNext : undefined)
   }
 
   return (
-    <div className="dialog-backdrop" onClick={onCancel}>
-      <div className="dialog-card" onClick={e => e.stopPropagation()}>
+    <div className="dialog-backdrop">
+      <div className="dialog-card">
         <p className="panel-label">Confirm</p>
         <h3>Mark "{taskTitle}" done?</h3>
         {error && <div className="setup-error">{error}</div>}
@@ -51,6 +57,16 @@ export function MarkDoneDialog({ taskTitle, onCancel, onConfirm }: Props) {
               placeholder="What happened? Outcome, links, follow-ups…"
             />
           </label>
+          {showCreateNext && (
+            <label className="inherit-tickbox">
+              <input
+                type="checkbox"
+                checked={createNext}
+                onChange={e => setCreateNext(e.target.checked)}
+              />
+              <span>Create the next occurrence after marking this done</span>
+            </label>
+          )}
           <div className="dialog-actions">
             <button type="button" className="chip" onClick={onCancel} disabled={submitting}>
               Cancel

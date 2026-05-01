@@ -161,8 +161,8 @@ export function TaskModal({
   })()
 
   return (
-    <div className="dialog-backdrop" onClick={onCancel}>
-      <div className="dialog-card task-modal" onClick={e => e.stopPropagation()}>
+    <div className="dialog-backdrop">
+      <div className="dialog-card task-modal">
         <p className="panel-label">{headlineLabel}</p>
         <h3>{headlineTitle}</h3>
         {parent && (

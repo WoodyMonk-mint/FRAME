@@ -48,6 +48,29 @@ declare global {
       Promise<{ ok: boolean; error?: string }>
     softDeleteWorkflowInstance: (id: number) =>
       Promise<{ ok: boolean; error?: string }>
+
+    // Recurring tasks — Iteration 4
+    listRecurrenceTemplates:  () => Promise<import('./types').RecurrenceTemplateSummary[]>
+    getRecurrenceTemplate:    (id: number) => Promise<
+      | {
+          ok: true
+          template:    import('./types').Task
+          occurrences: import('./types').Task[]
+          subtasks:    import('./types').Task[]
+        }
+      | { ok: false; error: string }
+    >
+    createRecurrenceTemplate: (input: import('./types').NewRecurrenceInput) =>
+      Promise<{ ok: boolean; templateId?: number; firstOccurrenceId?: number; error?: string }>
+    updateRecurrenceTemplate: (id: number, patch: import('./types').RecurrencePatch) =>
+      Promise<{ ok: boolean; error?: string }>
+    softDeleteRecurrenceTemplate: (id: number) =>
+      Promise<{ ok: boolean; error?: string }>
+    completeRecurringOccurrence: (
+      taskId: number, completedDate: string | null, note: string | null, createNext: boolean
+    ) => Promise<{ ok: boolean; nextTaskId?: number | null; error?: string }>
+    reorderChecklist:         (parentId: number | null, orderedTaskIds: number[]) =>
+      Promise<{ ok: boolean; error?: string }>
     addWorkflowStep:        (instanceId: number, input: import('./types').NewWorkflowStepInput) =>
       Promise<{ ok: boolean; stepId?: number; taskId?: number; error?: string }>
     listWorkflowNotes:      (instanceId: number) =>

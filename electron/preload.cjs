@@ -31,6 +31,17 @@ try {
       updateTask:      (id, patch)     => ipcRenderer.invoke('db:update-task', id, patch),
       softDeleteTask:  (id)            => ipcRenderer.invoke('db:soft-delete-task', id),
 
+      // Recurring tasks — Iteration 4
+      listRecurrenceTemplates:  ()                    => ipcRenderer.invoke('db:list-recurrence-templates'),
+      getRecurrenceTemplate:    (id)                  => ipcRenderer.invoke('db:get-recurrence-template', id),
+      createRecurrenceTemplate: (input)               => ipcRenderer.invoke('db:create-recurrence-template', input),
+      updateRecurrenceTemplate: (id, patch)           => ipcRenderer.invoke('db:update-recurrence-template', id, patch),
+      softDeleteRecurrenceTemplate: (id)              => ipcRenderer.invoke('db:soft-delete-recurrence-template', id),
+      completeRecurringOccurrence: (taskId, completedDate, note, createNext) =>
+        ipcRenderer.invoke('db:complete-recurring-occurrence', taskId, completedDate, note, createNext),
+      reorderChecklist:         (parentId, orderedTaskIds) =>
+        ipcRenderer.invoke('db:reorder-checklist', parentId, orderedTaskIds),
+
       // Workflows — Iteration 3
       listWorkflowTemplates:  ()       => ipcRenderer.invoke('db:list-workflow-templates'),
       listWorkflowInstances:  ()       => ipcRenderer.invoke('db:list-workflow-instances'),

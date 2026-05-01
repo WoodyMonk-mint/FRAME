@@ -51,28 +51,48 @@ function setupPaths(chosenDbPath) {
 
 function taskRowToObject(r, assignees, tags) {
   return {
-    id:                  r.id,
-    type:                r.type,
-    categoryId:          r.category_id,
-    categoryName:        r.category_name ?? null,
-    parentTaskId:        r.parent_task_id ?? null,
-    workflowInstanceId:  r.workflow_instance_id ?? null,
-    workflowStepNumber:  r.workflow_step_number ?? null,
-    title:               r.title,
-    description:         r.description,
-    status:              r.status,
-    priority:            r.priority,
-    primaryOwner:        r.primary_owner,
-    assignees:           assignees ?? [],
-    tags:                tags ?? [],
-    dueDate:             r.due_date,
-    completedDate:       r.completed_date,
-    percentComplete:     r.percent_complete ?? 0,
-    percentManual:       !!r.percent_manual,
-    notes:               r.notes,
-    createdAt:           r.created_at,
-    updatedAt:           r.updated_at,
+    id:                   r.id,
+    type:                 r.type,
+    categoryId:           r.category_id,
+    categoryName:         r.category_name ?? null,
+    parentTaskId:         r.parent_task_id ?? null,
+    workflowInstanceId:   r.workflow_instance_id ?? null,
+    workflowStepNumber:   r.workflow_step_number ?? null,
+    recurrenceTemplateId: r.recurrence_template_id ?? null,
+    recurrenceUnit:       r.recurrence_unit ?? null,
+    recurrenceInterval:   r.recurrence_interval ?? null,
+    autoCreateNext:       r.auto_create_next == null ? null : !!r.auto_create_next,
+    sortOrder:            r.sort_order ?? null,
+    title:                r.title,
+    description:          r.description,
+    status:               r.status,
+    priority:             r.priority,
+    primaryOwner:         r.primary_owner,
+    assignees:            assignees ?? [],
+    tags:                 tags ?? [],
+    dueDate:              r.due_date,
+    completedDate:        r.completed_date,
+    percentComplete:      r.percent_complete ?? 0,
+    percentManual:        !!r.percent_manual,
+    notes:                r.notes,
+    createdAt:            r.created_at,
+    updatedAt:            r.updated_at,
   }
+}
+
+function addRecurrence(iso, unit, interval) {
+  if (!iso || !unit) return null
+  const d = new Date(iso + 'T00:00:00Z')
+  if (Number.isNaN(d.getTime())) return null
+  const n = Math.max(1, Number(interval) || 1)
+  switch (unit) {
+    case 'day':   d.setUTCDate(d.getUTCDate()       + n);     break
+    case 'week':  d.setUTCDate(d.getUTCDate()       + n * 7); break
+    case 'month': d.setUTCMonth(d.getUTCMonth()     + n);     break
+    case 'year':  d.setUTCFullYear(d.getUTCFullYear() + n);   break
+    default: return null
+  }
+  return d.toISOString().slice(0, 10)
 }
 
 function getTaskById(id) {
@@ -408,6 +428,17 @@ function runMigrations() {
     db.exec('ALTER TABLE tasks ADD COLUMN percent_manual INTEGER DEFAULT 0')
     console.log('[DB] Added percent_manual column to tasks')
   }
+  if (!taskCols.includes('recurrence_template_id')) {
+    db.exec('ALTER TABLE tasks ADD COLUMN recurrence_template_id INTEGER REFERENCES tasks(id)')
+    db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_recurrence_template ON tasks(recurrence_template_id)')
+    console.log('[DB] Added recurrence_template_id column to tasks')
+  }
+  if (!taskCols.includes('sort_order')) {
+    // User-defined ordering within a parent's children. NULL means
+    // "fall back to created_at" so existing rows keep their visible order.
+    db.exec('ALTER TABLE tasks ADD COLUMN sort_order INTEGER')
+    console.log('[DB] Added sort_order column to tasks')
+  }
 
   // Iteration 3 Pass 4: workflows get priority + primary_owner + team
   const wfCols = db.pragma('table_info(workflow_instances)').map(c => c.name)
@@ -674,6 +705,8 @@ function registerIpcHandlers() {
       LEFT JOIN workflow_instance_steps wis ON wis.task_id = t.id
       WHERE t.is_deleted = 0
       ORDER BY
+        t.sort_order IS NULL,
+        t.sort_order,
         CASE t.priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 ELSE 4 END,
         t.due_date IS NULL,
         t.due_date,
@@ -860,6 +893,524 @@ function registerIpcHandlers() {
       return { ok: true, task: getTaskById(id) }
     } catch (err) {
       console.error('[DB] update-task failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  // ─── Recurring tasks ──────────────────────────────────────────────────────
+
+  ipcMain.handle('db:list-recurrence-templates', () => {
+    if (!db) return []
+    const rows = db.prepare(`
+      SELECT t.*, c.name AS category_name,
+        (
+          SELECT COUNT(*) FROM tasks o
+          WHERE o.recurrence_template_id = t.id AND o.is_deleted = 0
+        ) AS total_occurrences,
+        (
+          SELECT COUNT(*) FROM tasks o
+          WHERE o.recurrence_template_id = t.id AND o.is_deleted = 0 AND o.status = 'DONE'
+        ) AS done_occurrences,
+        (
+          SELECT MIN(o.due_date) FROM tasks o
+          WHERE o.recurrence_template_id = t.id AND o.is_deleted = 0
+            AND o.status NOT IN ('DONE','CANCELLED') AND o.due_date IS NOT NULL
+        ) AS next_open_due,
+        (
+          SELECT MAX(o.completed_date) FROM tasks o
+          WHERE o.recurrence_template_id = t.id AND o.is_deleted = 0 AND o.status = 'DONE'
+        ) AS last_completed
+      FROM tasks t
+      LEFT JOIN categories c ON c.id = t.category_id
+      WHERE t.recurrence_unit IS NOT NULL
+        AND t.recurrence_template_id IS NULL
+        AND t.is_deleted = 0
+      ORDER BY t.created_at DESC
+    `).all()
+    if (rows.length === 0) return []
+    const ids = rows.map(r => r.id)
+    const ph = ids.map(() => '?').join(',')
+    const aRows = db.prepare(`SELECT task_id, name FROM task_assignees WHERE task_id IN (${ph})`).all(...ids)
+    const tRows = db.prepare(`SELECT task_id, tag  FROM task_tags      WHERE task_id IN (${ph})`).all(...ids)
+    const asnByTask = {}, tagsByTask = {}
+    for (const a of aRows) (asnByTask[a.task_id]  ??= []).push(a.name)
+    for (const t of tRows) (tagsByTask[t.task_id] ??= []).push(t.tag)
+    return rows.map(r => ({
+      template:         taskRowToObject(r, asnByTask[r.id] ?? [], tagsByTask[r.id] ?? []),
+      totalOccurrences: r.total_occurrences,
+      doneOccurrences:  r.done_occurrences,
+      nextOpenDue:      r.next_open_due,
+      lastCompleted:    r.last_completed,
+    }))
+  })
+
+  ipcMain.handle('db:get-recurrence-template', (_event, id) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const tplRow = db.prepare(`
+        SELECT t.*, c.name AS category_name
+        FROM tasks t
+        LEFT JOIN categories c ON c.id = t.category_id
+        WHERE t.id = ?
+          AND t.recurrence_unit IS NOT NULL
+          AND t.recurrence_template_id IS NULL
+          AND t.is_deleted = 0
+      `).get(id)
+      if (!tplRow) throw new Error(`Recurrence template ${id} not found`)
+      const tplAsn  = db.prepare('SELECT name FROM task_assignees WHERE task_id = ?').all(id).map(x => x.name)
+      const tplTags = db.prepare('SELECT tag  FROM task_tags      WHERE task_id = ?').all(id).map(x => x.tag)
+      const template = taskRowToObject(tplRow, tplAsn, tplTags)
+
+      const occRows = db.prepare(`
+        SELECT t.*, c.name AS category_name
+        FROM tasks t
+        LEFT JOIN categories c ON c.id = t.category_id
+        WHERE t.recurrence_template_id = ? AND t.is_deleted = 0
+        ORDER BY
+          t.due_date IS NULL,
+          t.due_date,
+          t.created_at
+      `).all(id)
+      const occIds = occRows.map(r => r.id)
+      const asnByTask = {}, tagsByTask = {}
+      if (occIds.length > 0) {
+        const ph = occIds.map(() => '?').join(',')
+        const a = db.prepare(`SELECT task_id, name FROM task_assignees WHERE task_id IN (${ph})`).all(...occIds)
+        const tg = db.prepare(`SELECT task_id, tag  FROM task_tags      WHERE task_id IN (${ph})`).all(...occIds)
+        for (const x of a)  (asnByTask[x.task_id]  ??= []).push(x.name)
+        for (const x of tg) (tagsByTask[x.task_id] ??= []).push(x.tag)
+      }
+      const occurrences = occRows.map(r =>
+        taskRowToObject(r, asnByTask[r.id] ?? [], tagsByTask[r.id] ?? [])
+      )
+
+      // Subtasks: children of template OR any occurrence. Returned flat so
+      // the renderer can build a parent_task_id → children map.
+      const parentIds = [id, ...occRows.map(r => r.id)]
+      let subtasks = []
+      if (parentIds.length > 0) {
+        const ph = parentIds.map(() => '?').join(',')
+        const subRows = db.prepare(`
+          SELECT t.*, c.name AS category_name
+          FROM tasks t
+          LEFT JOIN categories c ON c.id = t.category_id
+          WHERE t.parent_task_id IN (${ph}) AND t.is_deleted = 0
+          ORDER BY t.parent_task_id,
+                   t.sort_order IS NULL,
+                   t.sort_order,
+                   t.created_at
+        `).all(...parentIds)
+        const subIds = subRows.map(r => r.id)
+        const sAsn = {}, sTags = {}
+        if (subIds.length > 0) {
+          const sph = subIds.map(() => '?').join(',')
+          for (const x of db.prepare(`SELECT task_id, name FROM task_assignees WHERE task_id IN (${sph})`).all(...subIds))
+            (sAsn[x.task_id]  ??= []).push(x.name)
+          for (const x of db.prepare(`SELECT task_id, tag  FROM task_tags      WHERE task_id IN (${sph})`).all(...subIds))
+            (sTags[x.task_id] ??= []).push(x.tag)
+        }
+        subtasks = subRows.map(r =>
+          taskRowToObject(r, sAsn[r.id] ?? [], sTags[r.id] ?? [])
+        )
+      }
+
+      return { ok: true, template, occurrences, subtasks }
+    } catch (err) {
+      console.error('[DB] get-recurrence-template failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:create-recurrence-template', (_event, input) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      let templateId, firstOccurrenceId
+      const tx = db.transaction(() => {
+        const title = String(input?.title ?? '').trim()
+        if (!title) throw new Error('Title is required')
+        if (!input?.recurrenceUnit) throw new Error('Recurrence unit is required')
+        const interval = Math.max(1, Number(input?.recurrenceInterval) || 1)
+        const dueDate = input?.dueDate ?? null
+
+        const insertTask = (extras) => db.prepare(`
+          INSERT INTO tasks (
+            type, category_id, parent_task_id, workflow_instance_id, recurrence_template_id,
+            title, description, status, priority, primary_owner,
+            due_date, completed_date, percent_complete, percent_manual,
+            recurrence_type, recurrence_interval, recurrence_unit, recurrence_anchor,
+            next_due_date, auto_create_next, notes
+          ) VALUES (
+            'repeating', @categoryId, NULL, NULL, @recurrenceTemplateId,
+            @title, @description, @status, @priority, @primaryOwner,
+            @dueDate, NULL, @percentComplete, 0,
+            @recurrenceType, @recurrenceInterval, @recurrenceUnit, @recurrenceAnchor,
+            @nextDueDate, @autoCreateNext, @notes
+          )
+        `).run(extras)
+
+        // Template row: holds the rule, no status/percent of its own.
+        const tplRes = insertTask({
+          categoryId:            input?.categoryId ?? null,
+          recurrenceTemplateId:  null,
+          title,
+          description:           input?.description ?? null,
+          status:                'PLANNING',
+          priority:              input?.priority ?? null,
+          primaryOwner:          input?.primaryOwner ?? null,
+          dueDate,
+          percentComplete:       0,
+          recurrenceType:        input?.recurrenceType ?? null,
+          recurrenceInterval:    interval,
+          recurrenceUnit:        input?.recurrenceUnit,
+          recurrenceAnchor:      input?.recurrenceAnchor ?? null,
+          nextDueDate:           dueDate,
+          autoCreateNext:        input?.autoCreateNext === false ? 0 : 1,
+          notes:                 input?.notes ?? null,
+        })
+        templateId = Number(tplRes.lastInsertRowid)
+
+        // Tags + assignees on the template.
+        const cleanAssignees = Array.isArray(input?.assignees)
+          ? [...new Set(input.assignees.map(String).filter(Boolean))] : []
+        if (input?.primaryOwner && !cleanAssignees.includes(input.primaryOwner)) {
+          cleanAssignees.push(input.primaryOwner)
+        }
+        const cleanTags = Array.isArray(input?.tags)
+          ? [...new Set(input.tags.map(t => String(t).trim()).filter(Boolean))] : []
+        const insAsn = db.prepare('INSERT INTO task_assignees (task_id, name) VALUES (?, ?)')
+        const insTag = db.prepare('INSERT INTO task_tags      (task_id, tag)  VALUES (?, ?)')
+        for (const n of cleanAssignees) insAsn.run(templateId, n)
+        for (const t of cleanTags)      insTag.run(templateId, t)
+
+        // First occurrence: same fields, points to template.
+        const occRes = insertTask({
+          categoryId:            input?.categoryId ?? null,
+          recurrenceTemplateId:  templateId,
+          title,
+          description:           input?.description ?? null,
+          status:                'PLANNING',
+          priority:              input?.priority ?? null,
+          primaryOwner:          input?.primaryOwner ?? null,
+          dueDate,
+          percentComplete:       0,
+          recurrenceType:        input?.recurrenceType ?? null,
+          recurrenceInterval:    interval,
+          recurrenceUnit:        input?.recurrenceUnit,
+          recurrenceAnchor:      input?.recurrenceAnchor ?? null,
+          nextDueDate:           addRecurrence(dueDate, input?.recurrenceUnit, interval),
+          autoCreateNext:        input?.autoCreateNext === false ? 0 : 1,
+          notes:                 null,
+        })
+        firstOccurrenceId = Number(occRes.lastInsertRowid)
+        for (const n of cleanAssignees) insAsn.run(firstOccurrenceId, n)
+        for (const t of cleanTags)      insTag.run(firstOccurrenceId, t)
+
+        // Subtasks (checklist) — one row under the template (canonical
+        // definition) and one under the first occurrence (live copy).
+        const subInputs = Array.isArray(input?.subtasks)
+          ? input.subtasks.filter(s => s && String(s.title ?? '').trim())
+          : []
+        const insSubtask = db.prepare(`
+          INSERT INTO tasks (
+            type, category_id, parent_task_id, title, description, status, priority,
+            primary_owner, due_date, percent_complete, sort_order
+          ) VALUES (
+            'one-off', @categoryId, @parentTaskId, @title, @description, 'PLANNING', @priority,
+            @primaryOwner, NULL, 0, @sortOrder
+          )
+        `)
+        subInputs.forEach((s, idx) => {
+          const baseFields = {
+            categoryId:   input?.categoryId ?? null,
+            title:        String(s.title).trim(),
+            description:  s.description ?? null,
+            priority:     s.priority ?? null,
+            primaryOwner: s.primaryOwner ?? null,
+            sortOrder:    idx,
+          }
+          insSubtask.run({ ...baseFields, parentTaskId: templateId })
+          insSubtask.run({ ...baseFields, parentTaskId: firstOccurrenceId })
+        })
+
+        const tplRow = db.prepare('SELECT * FROM tasks WHERE id = ?').get(templateId)
+        db.prepare(`
+          INSERT INTO audit_log (table_name, row_id, action, changed_by, new_values)
+          VALUES ('tasks', ?, 'INSERT_RECURRENCE_TEMPLATE', 'user', ?)
+        `).run(templateId, JSON.stringify({ ...tplRow, first_occurrence_id: firstOccurrenceId }))
+      })
+      tx()
+      return { ok: true, templateId, firstOccurrenceId }
+    } catch (err) {
+      console.error('[DB] create-recurrence-template failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:update-recurrence-template', (_event, id, patch) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const tx = db.transaction(() => {
+        const oldRow = db.prepare(`
+          SELECT * FROM tasks
+          WHERE id = ? AND recurrence_unit IS NOT NULL
+            AND recurrence_template_id IS NULL AND is_deleted = 0
+        `).get(id)
+        if (!oldRow) throw new Error(`Recurrence template ${id} not found`)
+        const oldAsn  = db.prepare('SELECT name FROM task_assignees WHERE task_id = ?').all(id).map(r => r.name)
+        const oldTags = db.prepare('SELECT tag  FROM task_tags      WHERE task_id = ?').all(id).map(r => r.tag)
+
+        const map = {
+          title:              'title',
+          description:        'description',
+          categoryId:         'category_id',
+          priority:           'priority',
+          primaryOwner:       'primary_owner',
+          dueDate:            'due_date',
+          recurrenceType:     'recurrence_type',
+          recurrenceInterval: 'recurrence_interval',
+          recurrenceUnit:     'recurrence_unit',
+          recurrenceAnchor:   'recurrence_anchor',
+          nextDueDate:        'next_due_date',
+          autoCreateNext:     'auto_create_next',
+          notes:              'notes',
+        }
+        const setParts = []
+        const params = { id }
+        for (const [tsKey, sqlKey] of Object.entries(map)) {
+          if (Object.prototype.hasOwnProperty.call(patch, tsKey)) {
+            setParts.push(`${sqlKey} = @${tsKey}`)
+            const v = patch[tsKey]
+            params[tsKey] = (tsKey === 'autoCreateNext') ? (v ? 1 : 0) : (v ?? null)
+          }
+        }
+        if (setParts.length > 0) {
+          setParts.push(`updated_at = datetime('now')`)
+          db.prepare(`UPDATE tasks SET ${setParts.join(', ')} WHERE id = @id`).run(params)
+        }
+
+        if (Array.isArray(patch.assignees)) {
+          const owner = Object.prototype.hasOwnProperty.call(patch, 'primaryOwner')
+            ? patch.primaryOwner : oldRow.primary_owner
+          const next = [...new Set(patch.assignees.map(String).filter(Boolean))]
+          if (owner && !next.includes(owner)) next.push(owner)
+          db.prepare('DELETE FROM task_assignees WHERE task_id = ?').run(id)
+          const insA = db.prepare('INSERT INTO task_assignees (task_id, name) VALUES (?, ?)')
+          for (const n of next) insA.run(id, n)
+        }
+        if (Array.isArray(patch.tags)) {
+          const next = [...new Set(patch.tags.map(t => String(t).trim()).filter(Boolean))]
+          db.prepare('DELETE FROM task_tags WHERE task_id = ?').run(id)
+          const insT = db.prepare('INSERT INTO task_tags (task_id, tag) VALUES (?, ?)')
+          for (const t of next) insT.run(id, t)
+        }
+
+        const newRow = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id)
+        db.prepare(`
+          INSERT INTO audit_log (table_name, row_id, action, changed_by, old_values, new_values)
+          VALUES ('tasks', ?, 'UPDATE_RECURRENCE_TEMPLATE', 'user', ?, ?)
+        `).run(
+          id,
+          JSON.stringify({ ...oldRow, assignees: oldAsn, tags: oldTags }),
+          JSON.stringify(newRow),
+        )
+      })
+      tx()
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] update-recurrence-template failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:soft-delete-recurrence-template', (_event, id) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const tx = db.transaction(() => {
+        const oldRow = db.prepare(`
+          SELECT * FROM tasks WHERE id = ? AND is_deleted = 0
+            AND recurrence_unit IS NOT NULL AND recurrence_template_id IS NULL
+        `).get(id)
+        if (!oldRow) throw new Error(`Recurrence template ${id} not found`)
+        const occIds = db.prepare(
+          'SELECT id FROM tasks WHERE recurrence_template_id = ? AND is_deleted = 0'
+        ).all(id).map(r => r.id)
+        if (occIds.length > 0) {
+          const ph = occIds.map(() => '?').join(',')
+          db.prepare(`UPDATE tasks SET is_deleted = 1, updated_at = datetime('now') WHERE id IN (${ph})`).run(...occIds)
+        }
+        db.prepare(`UPDATE tasks SET is_deleted = 1, updated_at = datetime('now') WHERE id = ?`).run(id)
+        db.prepare(`
+          INSERT INTO audit_log (table_name, row_id, action, changed_by, old_values, new_values)
+          VALUES ('tasks', ?, 'SOFT_DELETE_RECURRENCE_TEMPLATE', 'user', ?, ?)
+        `).run(id, JSON.stringify(oldRow), JSON.stringify({ ...oldRow, is_deleted: 1, soft_deleted_occurrence_ids: occIds }))
+      })
+      tx()
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] soft-delete-recurrence-template failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  // Reorder a set of tasks. parentId === null means "top-level" (no parent).
+  // Each id must be a non-deleted task whose parent_task_id matches the
+  // requested parent. The caller can pass a subset — only listed ids have
+  // their sort_order rewritten; everything else is left alone.
+  ipcMain.handle('db:reorder-checklist', (_event, parentId, orderedTaskIds) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      if (!Array.isArray(orderedTaskIds) || orderedTaskIds.length === 0) {
+        return { ok: true }
+      }
+      const tx = db.transaction(() => {
+        const lookup = db.prepare('SELECT id, parent_task_id FROM tasks WHERE id = ? AND is_deleted = 0')
+        for (const id of orderedTaskIds) {
+          const row = lookup.get(id)
+          if (!row) throw new Error(`Task ${id} not found or deleted`)
+          if (parentId == null) {
+            if (row.parent_task_id != null) {
+              throw new Error(`Task ${id} has a parent — top-level reorder requires parentId=null`)
+            }
+          } else {
+            if (row.parent_task_id !== parentId) {
+              throw new Error(`Task ${id} is not a child of ${parentId}`)
+            }
+          }
+        }
+        const upd = db.prepare(`UPDATE tasks SET sort_order = ?, updated_at = datetime('now') WHERE id = ?`)
+        orderedTaskIds.forEach((id, idx) => upd.run(idx, id))
+      })
+      tx()
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] reorder-checklist failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  // Mark a recurring occurrence DONE and (optionally) create the next one.
+  ipcMain.handle('db:complete-recurring-occurrence', (_event, taskId, completedDate, note, createNext) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      let nextTaskId = null
+      const tx = db.transaction(() => {
+        const occ = db.prepare(`
+          SELECT t.*
+          FROM tasks t
+          WHERE t.id = ? AND t.is_deleted = 0
+            AND t.recurrence_template_id IS NOT NULL
+        `).get(taskId)
+        if (!occ) throw new Error(`Recurring occurrence ${taskId} not found`)
+
+        // Mark current occurrence done.
+        const noteText = (note ?? '').trim()
+        let newNotes = occ.notes
+        if (noteText) {
+          const stamped = `[${completedDate ?? ''}] Done — ${noteText}`
+          newNotes = (occ.notes && occ.notes.trim())
+            ? `${stamped}\n\n${occ.notes}` : stamped
+        }
+        db.prepare(`
+          UPDATE tasks
+          SET status = 'DONE', completed_date = ?, percent_complete = 100,
+              notes = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(completedDate ?? null, newNotes, taskId)
+
+        if (createNext) {
+          const tpl = db.prepare(`
+            SELECT * FROM tasks WHERE id = ? AND is_deleted = 0
+          `).get(occ.recurrence_template_id)
+          if (!tpl) throw new Error(`Template ${occ.recurrence_template_id} not found`)
+          const nextDue = addRecurrence(occ.due_date, tpl.recurrence_unit, tpl.recurrence_interval ?? 1)
+          if (!nextDue) throw new Error('Cannot compute next due date — current occurrence has no due date')
+
+          const insRes = db.prepare(`
+            INSERT INTO tasks (
+              type, category_id, parent_task_id, workflow_instance_id, recurrence_template_id,
+              title, description, status, priority, primary_owner,
+              due_date, percent_complete, percent_manual,
+              recurrence_type, recurrence_interval, recurrence_unit, recurrence_anchor,
+              next_due_date, auto_create_next
+            ) VALUES (
+              'repeating', @categoryId, NULL, NULL, @recurrenceTemplateId,
+              @title, @description, 'PLANNING', @priority, @primaryOwner,
+              @dueDate, 0, 0,
+              @recurrenceType, @recurrenceInterval, @recurrenceUnit, @recurrenceAnchor,
+              @nextDueDate, @autoCreateNext
+            )
+          `).run({
+            categoryId:           tpl.category_id ?? null,
+            recurrenceTemplateId: tpl.id,
+            title:                tpl.title,
+            description:          tpl.description ?? null,
+            priority:             tpl.priority ?? null,
+            primaryOwner:         tpl.primary_owner ?? null,
+            dueDate:              nextDue,
+            recurrenceType:       tpl.recurrence_type ?? null,
+            recurrenceInterval:   tpl.recurrence_interval ?? 1,
+            recurrenceUnit:       tpl.recurrence_unit,
+            recurrenceAnchor:     tpl.recurrence_anchor ?? null,
+            nextDueDate:          addRecurrence(nextDue, tpl.recurrence_unit, tpl.recurrence_interval ?? 1),
+            autoCreateNext:       tpl.auto_create_next ?? 1,
+          })
+          nextTaskId = Number(insRes.lastInsertRowid)
+
+          // Inherit assignees + tags from the template.
+          const tplAsn  = db.prepare('SELECT name FROM task_assignees WHERE task_id = ?').all(tpl.id).map(r => r.name)
+          const tplTags = db.prepare('SELECT tag  FROM task_tags      WHERE task_id = ?').all(tpl.id).map(r => r.tag)
+          const insA = db.prepare('INSERT INTO task_assignees (task_id, name) VALUES (?, ?)')
+          const insT = db.prepare('INSERT INTO task_tags      (task_id, tag)  VALUES (?, ?)')
+          for (const n of tplAsn)  insA.run(nextTaskId, n)
+          for (const t of tplTags) insT.run(nextTaskId, t)
+
+          // Clone template's checklist subtasks under the new occurrence,
+          // preserving the template's sort_order so the new copy comes out
+          // in the same order the user has set on the template.
+          const tplSubs = db.prepare(`
+            SELECT * FROM tasks
+            WHERE parent_task_id = ? AND is_deleted = 0
+            ORDER BY sort_order IS NULL, sort_order, created_at
+          `).all(tpl.id)
+          if (tplSubs.length > 0) {
+            const insSub = db.prepare(`
+              INSERT INTO tasks (
+                type, category_id, parent_task_id, title, description, status, priority,
+                primary_owner, due_date, percent_complete, sort_order
+              ) VALUES (
+                'one-off', @categoryId, @parentTaskId, @title, @description, 'PLANNING', @priority,
+                @primaryOwner, NULL, 0, @sortOrder
+              )
+            `)
+            tplSubs.forEach((s, idx) => {
+              insSub.run({
+                categoryId:   s.category_id,
+                parentTaskId: nextTaskId,
+                title:        s.title,
+                description:  s.description,
+                priority:     s.priority,
+                primaryOwner: s.primary_owner,
+                sortOrder:    s.sort_order ?? idx,
+              })
+            })
+          }
+
+          // Update template's next_due_date for display purposes.
+          db.prepare(`UPDATE tasks SET next_due_date = ?, updated_at = datetime('now') WHERE id = ?`).run(nextDue, tpl.id)
+        }
+
+        db.prepare(`
+          INSERT INTO audit_log (table_name, row_id, action, changed_by, new_values)
+          VALUES ('tasks', ?, 'COMPLETE_RECURRING', 'user', ?)
+        `).run(taskId, JSON.stringify({
+          completed_date: completedDate ?? null, note: noteText || null,
+          next_task_id: nextTaskId,
+        }))
+      })
+      tx()
+      return { ok: true, nextTaskId }
+    } catch (err) {
+      console.error('[DB] complete-recurring-occurrence failed:', err.message)
       return { ok: false, error: err.message }
     }
   })

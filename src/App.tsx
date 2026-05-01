@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ViewDef, ViewId } from './types'
+import { RecurringView } from './views/RecurringView'
 import { TaskListView } from './views/TaskListView'
 import { WorkflowsView } from './views/WorkflowsView'
 import './index.css'
@@ -9,6 +10,7 @@ import './index.css'
 const VIEWS: ViewDef[] = [
   { id: 'tasks',     label: 'Task List' },
   { id: 'workflows', label: 'Workflows' },
+  { id: 'recurring', label: 'Recurring' },
   { id: 'my-work',   label: 'My Work',   iterationNote: 'Coming in Iteration 9 — personal task view filtered to the active user.' },
   { id: 'dashboard', label: 'Dashboard', iterationNote: 'Coming in Iteration 6 — summary cards and charts.' },
   { id: 'calendar',  label: 'Calendar',  iterationNote: 'Coming in Iteration 7 — month/week view with task blocks.' },
@@ -19,6 +21,9 @@ function App() {
   const [status, setStatus]         = useState<DbStatusInfo | null>(null)
   const [busy, setBusy]             = useState(false)
   const [activeView, setActiveView] = useState<ViewId>('tasks')
+  // Lifted so other views (e.g. Task List) can navigate to a specific
+  // workflow by setting both the active view and the selected instance.
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<number | null>(null)
 
   const refreshStatus = async () => {
     if (!window.frame?.db) return
@@ -76,9 +81,20 @@ function App() {
       </aside>
       <main className="main-content">
         {view.id === 'tasks' ? (
-          <TaskListView />
+          <TaskListView
+            onOpenWorkflow={(id) => {
+              setSelectedWorkflowId(id)
+              setActiveView('workflows')
+            }}
+          />
         ) : view.id === 'workflows' ? (
-          <WorkflowsView />
+          <WorkflowsView
+            selectedId={selectedWorkflowId}
+            onSelect={setSelectedWorkflowId}
+            onBack={() => setSelectedWorkflowId(null)}
+          />
+        ) : view.id === 'recurring' ? (
+          <RecurringView />
         ) : (
           <>
             <header className="view-header">
