@@ -342,11 +342,9 @@ function seedDatabase() {
         ['Production Processes',  2, '#6366f1'],
         ['Report & Intelligence', 3, '#f59e0b'],
         ['Gate Reviews',          4, '#f43f5e'],
-        ['Mandates',              5, '#10b981'],
-        ['Admin',                 6, '#64748b'],
       ]
       rows.forEach(r => ins.run(...r))
-      console.log('[DB] Seeded 6 categories')
+      console.log('[DB] Seeded 4 categories')
     }
 
     // Assignees
@@ -693,6 +691,59 @@ function registerIpcHandlers() {
 
   // ── Tasks (Iteration 1) ────────────────────────────────────────────────────
 
+  ipcMain.handle('db:create-category', (_event, input) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const name = String(input?.name ?? '').trim()
+      if (!name) throw new Error('Category name is required')
+      const existing = db.prepare('SELECT id FROM categories WHERE name = ?').get(name)
+      if (existing) throw new Error(`A category named "${name}" already exists`)
+      const maxSort = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM categories').get().m
+      const r = db.prepare(`
+        INSERT INTO categories (name, sort_order, colour, is_archived)
+        VALUES (?, ?, ?, 0)
+      `).run(name, input?.sortOrder ?? (maxSort + 1), input?.colour ?? null)
+      return { ok: true, id: Number(r.lastInsertRowid) }
+    } catch (err) {
+      console.error('[DB] create-category failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:update-category', (_event, id, patch) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const old = db.prepare('SELECT * FROM categories WHERE id = ?').get(id)
+      if (!old) throw new Error(`Category ${id} not found`)
+      const map = {
+        name:        'name',
+        colour:      'colour',
+        sortOrder:   'sort_order',
+        isArchived:  'is_archived',
+      }
+      const setParts = []
+      const params = { id }
+      for (const [tsKey, sqlKey] of Object.entries(map)) {
+        if (Object.prototype.hasOwnProperty.call(patch, tsKey)) {
+          setParts.push(`${sqlKey} = @${tsKey}`)
+          const v = patch[tsKey]
+          params[tsKey] = (tsKey === 'isArchived') ? (v ? 1 : 0) : v
+        }
+      }
+      if (setParts.length === 0) return { ok: true }
+      // Reject duplicate-rename collisions early.
+      if (Object.prototype.hasOwnProperty.call(patch, 'name')) {
+        const dup = db.prepare('SELECT id FROM categories WHERE name = ? AND id != ?').get(patch.name, id)
+        if (dup) throw new Error(`A category named "${patch.name}" already exists`)
+      }
+      db.prepare(`UPDATE categories SET ${setParts.join(', ')} WHERE id = @id`).run(params)
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] update-category failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
   ipcMain.handle('db:list-categories', () => {
     if (!db) return []
     return db.prepare(`
@@ -706,6 +757,70 @@ function registerIpcHandlers() {
       colour:     r.colour,
       isArchived: !!r.is_archived,
     }))
+  })
+
+  ipcMain.handle('db:create-assignee', (_event, input) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const name = String(input?.name ?? '').trim()
+      if (!name) throw new Error('Assignee name is required')
+      const existing = db.prepare('SELECT id FROM assignees WHERE name = ?').get(name)
+      if (existing) throw new Error(`An assignee named "${name}" already exists`)
+      const maxSort = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM assignees').get().m
+      const r = db.prepare(`
+        INSERT INTO assignees (name, is_active, sort_order)
+        VALUES (?, 1, ?)
+      `).run(name, input?.sortOrder ?? (maxSort + 1))
+      return { ok: true, id: Number(r.lastInsertRowid) }
+    } catch (err) {
+      console.error('[DB] create-assignee failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:update-assignee', (_event, id, patch) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const tx = db.transaction(() => {
+        const old = db.prepare('SELECT * FROM assignees WHERE id = ?').get(id)
+        if (!old) throw new Error(`Assignee ${id} not found`)
+
+        // Renames cascade through the soft references in tasks +
+        // task_assignees + workflow_instance_assignees.
+        if (Object.prototype.hasOwnProperty.call(patch, 'name') && patch.name !== old.name) {
+          const nextName = String(patch.name ?? '').trim()
+          if (!nextName) throw new Error('Assignee name is required')
+          const dup = db.prepare('SELECT id FROM assignees WHERE name = ? AND id != ?').get(nextName, id)
+          if (dup) throw new Error(`An assignee named "${nextName}" already exists`)
+          db.prepare('UPDATE task_assignees              SET name = ? WHERE name = ?').run(nextName, old.name)
+          db.prepare('UPDATE workflow_instance_assignees SET name = ? WHERE name = ?').run(nextName, old.name)
+          db.prepare('UPDATE tasks                       SET primary_owner = ? WHERE primary_owner = ?').run(nextName, old.name)
+        }
+
+        const map = {
+          name:       'name',
+          isActive:   'is_active',
+          sortOrder:  'sort_order',
+        }
+        const setParts = []
+        const params = { id }
+        for (const [tsKey, sqlKey] of Object.entries(map)) {
+          if (Object.prototype.hasOwnProperty.call(patch, tsKey)) {
+            setParts.push(`${sqlKey} = @${tsKey}`)
+            const v = patch[tsKey]
+            params[tsKey] = (tsKey === 'isActive') ? (v ? 1 : 0) : v
+          }
+        }
+        if (setParts.length > 0) {
+          db.prepare(`UPDATE assignees SET ${setParts.join(', ')} WHERE id = @id`).run(params)
+        }
+      })
+      tx()
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] update-assignee failed:', err.message)
+      return { ok: false, error: err.message }
+    }
   })
 
   ipcMain.handle('db:list-assignees', () => {
@@ -849,6 +964,40 @@ function registerIpcHandlers() {
     }))
   })
 
+  ipcMain.handle('db:rename-tag', (_event, oldTag, newTag) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const from = String(oldTag ?? '').trim()
+      const to   = String(newTag ?? '').trim()
+      if (!from)  throw new Error('Old tag is required')
+      if (!to)    throw new Error('New tag is required')
+      if (from === to) return { ok: true, mergedInto: false }
+      const tx = db.transaction(() => {
+        // task_tags: drop existing (task_id, to) collisions before renaming
+        // so we don't violate the implicit per-task uniqueness.
+        db.prepare(`
+          DELETE FROM task_tags
+          WHERE tag = ?
+            AND task_id IN (SELECT task_id FROM task_tags WHERE tag = ?)
+        `).run(from, to)
+        db.prepare('UPDATE task_tags SET tag = ? WHERE tag = ?').run(to, from)
+
+        // Same for workflow_instance_tags.
+        db.prepare(`
+          DELETE FROM workflow_instance_tags
+          WHERE tag = ?
+            AND instance_id IN (SELECT instance_id FROM workflow_instance_tags WHERE tag = ?)
+        `).run(from, to)
+        db.prepare('UPDATE workflow_instance_tags SET tag = ? WHERE tag = ?').run(to, from)
+      })
+      tx()
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] rename-tag failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
   ipcMain.handle('db:list-tags', () => {
     if (!db) return []
     return db.prepare(`
@@ -859,6 +1008,36 @@ function registerIpcHandlers() {
       GROUP BY tag
       ORDER BY n DESC, tag
     `).all().map(r => r.tag)
+  })
+
+  ipcMain.handle('db:list-tag-usage', () => {
+    if (!db) return []
+    // Distinct tags across both task_tags and workflow_instance_tags, with
+    // counts on each side so the user can see where the tag lives.
+    const rows = db.prepare(`
+      SELECT
+        tag,
+        SUM(in_tasks)     AS task_count,
+        SUM(in_workflows) AS workflow_count
+      FROM (
+        SELECT tt.tag, 1 AS in_tasks, 0 AS in_workflows
+        FROM task_tags tt
+        JOIN tasks t ON tt.task_id = t.id
+        WHERE t.is_deleted = 0
+        UNION ALL
+        SELECT wt.tag, 0 AS in_tasks, 1 AS in_workflows
+        FROM workflow_instance_tags wt
+        JOIN workflow_instances wi ON wt.instance_id = wi.id
+        WHERE wi.is_deleted = 0
+      )
+      GROUP BY tag
+      ORDER BY tag
+    `).all()
+    return rows.map(r => ({
+      tag:           r.tag,
+      taskCount:     r.task_count,
+      workflowCount: r.workflow_count,
+    }))
   })
 
   ipcMain.handle('db:create-task', (_event, input) => {

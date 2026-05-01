@@ -3,6 +3,7 @@ import type { ViewDef, ViewId } from './types'
 import { CalendarView } from './views/CalendarView'
 import { DashboardView } from './views/DashboardView'
 import { RecurringView } from './views/RecurringView'
+import { SettingsView } from './views/SettingsView'
 import { TaskListView } from './views/TaskListView'
 import { WorkflowsView } from './views/WorkflowsView'
 import './index.css'
@@ -16,7 +17,7 @@ const VIEWS: ViewDef[] = [
   { id: 'my-work',   label: 'My Work',   iterationNote: 'Coming in Iteration 9 — personal task view filtered to the active user.' },
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'calendar',  label: 'Calendar' },
-  { id: 'settings',  label: 'Settings',  iterationNote: 'Coming in Iteration 9 — taxonomy management with unlock-to-edit.' },
+  { id: 'settings',  label: 'Settings' },
 ]
 
 function App() {
@@ -118,6 +119,8 @@ function App() {
               setActiveView('workflows')
             }}
           />
+        ) : view.id === 'settings' ? (
+          <SettingsView />
         ) : (
           <>
             <header className="view-header">

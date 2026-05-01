@@ -29,8 +29,19 @@ declare global {
     // Domain — Iteration 1+
     listTasks:       () => Promise<import('./types').Task[]>
     listCategories:  () => Promise<import('./types').Category[]>
+    createCategory:  (input: { name: string; colour?: string | null; sortOrder?: number | null }) =>
+      Promise<{ ok: boolean; id?: number; error?: string }>
+    updateCategory:  (id: number, patch: { name?: string; colour?: string | null; sortOrder?: number; isArchived?: boolean }) =>
+      Promise<{ ok: boolean; error?: string }>
     listAssignees:   () => Promise<import('./types').Assignee[]>
+    createAssignee:  (input: { name: string; sortOrder?: number | null }) =>
+      Promise<{ ok: boolean; id?: number; error?: string }>
+    updateAssignee:  (id: number, patch: { name?: string; isActive?: boolean; sortOrder?: number }) =>
+      Promise<{ ok: boolean; error?: string }>
     listTags:        () => Promise<string[]>
+    listTagUsage:    () => Promise<{ tag: string; taskCount: number; workflowCount: number }[]>
+    renameTag:       (oldTag: string, newTag: string) =>
+      Promise<{ ok: boolean; error?: string }>
     listTaskHistory: (taskId: number) => Promise<import('./types').TaskHistoryEntry[]>
     takeSnapshot:    (snapshotDate?: string) =>
       Promise<{ ok: boolean; snapshotDate?: string; taskCount?: number; error?: string }>
