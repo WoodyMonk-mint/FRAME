@@ -4,6 +4,7 @@ import { ALL_PRIORITIES, ALL_STATUSES } from '../types'
 import { todayIso } from '../lib/date'
 import { computeAutoPercent, openSubtaskCount } from '../lib/percent'
 import { TagInput } from './TagInput'
+import { TaskHistoryPanel } from './TaskHistoryPanel'
 
 type Props = {
   mode:           'add' | 'edit'
@@ -11,6 +12,7 @@ type Props = {
   parent?:        Task          // when adding a subtask
   childCount?:    number        // when editing a parent
   autoChildren?:  Task[]        // for displaying live auto value
+  allTasks?:      Task[]        // for the "Blocked by" picker (omit to hide)
   categories:     Category[]
   assignees:      Assignee[]
   tagSuggestions: string[]
@@ -18,6 +20,7 @@ type Props = {
   onSave:         (input: TaskInput, options: { setCompletedToToday: boolean }) => Promise<void>
   onDelete?:      () => void
   onAddSubtask?:  () => void    // shown on edit modal for top-level tasks only
+  onOpenTask?:    (t: Task) => void  // jump to another task (used for reverse blocker links)
 }
 
 const STATUS_LABEL: Record<Status, string> = {
@@ -30,9 +33,9 @@ const STATUS_LABEL: Record<Status, string> = {
 }
 
 export function TaskModal({
-  mode, task, parent, childCount = 0, autoChildren = [],
+  mode, task, parent, childCount = 0, autoChildren = [], allTasks = [],
   categories, assignees, tagSuggestions,
-  onCancel, onSave, onDelete, onAddSubtask,
+  onCancel, onSave, onDelete, onAddSubtask, onOpenTask,
 }: Props) {
   const isAddSubtask = mode === 'add' && !!parent
 
@@ -60,6 +63,8 @@ export function TaskModal({
   )
   const [status, setStatus]                 = useState<Status>(task?.status ?? 'PLANNING')
   const [priority, setPriority]             = useState<Priority | null>(task?.priority ?? null)
+  const [blockedByTaskId, setBlockedByTaskId] = useState<number | null>(task?.blockedByTaskId ?? null)
+  const [blockedReason, setBlockedReason]     = useState(task?.blockedReason ?? '')
 
   const onToggleInheritTags = (next: boolean) => {
     setInheritTags(next)
@@ -128,6 +133,9 @@ export function TaskModal({
       // For a parent in auto mode, save the live auto value to keep stored
       // percent_complete reasonable for analytics; the manual flag stays off.
       const finalPercent = (hasChildren && !percentManual) ? autoValue : percentComplete
+      // Blocker fields are only meaningful while status === 'BLOCKED'.
+      // Clear them on save otherwise so the data matches the visible state.
+      const isBlocked = status === 'BLOCKED'
       await onSave({
         title:           title.trim(),
         categoryId,
@@ -141,6 +149,8 @@ export function TaskModal({
         percentManual,
         description:     description.trim() || null,
         notes:           notes.trim() || null,
+        blockedByTaskId: isBlocked ? blockedByTaskId               : null,
+        blockedReason:   isBlocked ? (blockedReason.trim() || null) : null,
       }, { setCompletedToToday: becomingDone })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -255,6 +265,86 @@ export function TaskModal({
             </label>
           </div>
 
+          {mode === 'edit' && task && (() => {
+            // Only count *active* tasks as currently-blocked. DONE / CANCELLED
+            // tasks no longer need this one; we ignore stale links.
+            const blocking = allTasks.filter(t =>
+              t.blockedByTaskId === task.id
+              && t.status !== 'DONE'
+              && t.status !== 'CANCELLED'
+            )
+            if (blocking.length === 0) return null
+            return (
+              <div className="form-field blocking-list-field">
+                <span>
+                  Blocking {blocking.length} task{blocking.length === 1 ? '' : 's'}
+                  <em className="muted compact"> (these are waiting on this one)</em>
+                </span>
+                <ul className="blocking-list">
+                  {blocking.map(t => (
+                    <li key={t.id}>
+                      {onOpenTask ? (
+                        <button type="button" className="blocking-link" onClick={() => onOpenTask(t)}>
+                          {t.title}
+                        </button>
+                      ) : (
+                        <span>{t.title}</span>
+                      )}
+                      {t.blockedReason && (
+                        <span className="muted compact"> — {t.blockedReason}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )
+          })()}
+
+          {status === 'BLOCKED' && allTasks.length > 0 && (
+            <div className="form-row">
+              <label className="form-field" style={{ flex: 2 }}>
+                <span>Blocked by <em className="muted compact">(optional)</em></span>
+                <select
+                  value={blockedByTaskId ?? ''}
+                  onChange={e => setBlockedByTaskId(e.target.value ? Number(e.target.value) : null)}
+                >
+                  <option value="">— Not blocked —</option>
+                  {allTasks
+                    .filter(t => {
+                      if (t.id === task?.id) return false
+                      if (t.workflowInstanceId !== null) return false
+                      if (t.recurrenceUnit !== null && t.recurrenceTemplateId === null) return false
+                      // Hide DONE / CANCELLED — a finished task can't be a
+                      // blocker. Keep the currently-selected one in the list
+                      // even if stale so it doesn't silently vanish.
+                      if (t.status === 'DONE' || t.status === 'CANCELLED') {
+                        return t.id === blockedByTaskId
+                      }
+                      return true
+                    })
+                    .sort((a, b) => a.title.localeCompare(b.title))
+                    .map(t => {
+                      const stale = t.status === 'DONE' || t.status === 'CANCELLED'
+                      return (
+                        <option key={t.id} value={t.id}>
+                          {t.title}{stale ? ` (${t.status.toLowerCase()})` : ''}
+                        </option>
+                      )
+                    })}
+                </select>
+              </label>
+              <label className="form-field" style={{ flex: 3 }}>
+                <span>Blocker reason <em className="muted compact">(optional)</em></span>
+                <input
+                  type="text"
+                  value={blockedReason}
+                  onChange={e => setBlockedReason(e.target.value)}
+                  placeholder={blockedByTaskId ? 'Why is this blocked?' : 'Or describe a non-task blocker'}
+                />
+              </label>
+            </div>
+          )}
+
           <div className="form-field">
             <span>Team</span>
             <div className="chip-row">
@@ -317,6 +407,10 @@ export function TaskModal({
             <span>Notes</span>
             <textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Optional — context, links, decisions" />
           </label>
+
+          {mode === 'edit' && task && (
+            <TaskHistoryPanel taskId={task.id} />
+          )}
 
           <div className="dialog-actions">
             {mode === 'edit' && onDelete && (

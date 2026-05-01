@@ -27,6 +27,7 @@ try {
       listCategories:  ()              => ipcRenderer.invoke('db:list-categories'),
       listAssignees:   ()              => ipcRenderer.invoke('db:list-assignees'),
       listTags:        ()              => ipcRenderer.invoke('db:list-tags'),
+      listTaskHistory: (taskId)        => ipcRenderer.invoke('db:list-task-history', taskId),
       createTask:      (input)         => ipcRenderer.invoke('db:create-task', input),
       updateTask:      (id, patch)     => ipcRenderer.invoke('db:update-task', id, patch),
       softDeleteTask:  (id)            => ipcRenderer.invoke('db:soft-delete-task', id),

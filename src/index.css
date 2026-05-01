@@ -5845,6 +5845,16 @@ kbd {
 .task-title-cell {
   font-weight: 500;
   color: var(--text);
+  min-width: 29rem;
+}
+
+.task-title-text {
+  display: inline;
+  min-width: 0;
+}
+.task-parent-context {
+  font-size: 0.75rem;
+  font-weight: 400;
 }
 
 .category-cell {
@@ -6273,6 +6283,86 @@ kbd {
 .task-drag-handle:active { cursor: grabbing; }
 .task-row-dragging td { opacity: 0.4; }
 .task-row-drag-over td { border-top: 2px solid rgba(99, 102, 241, 0.85) !important; }
+
+.blocked-icon {
+  font-size: 0.85em;
+  cursor: help;
+  user-select: none;
+}
+
+.task-history {
+  margin-top: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+}
+.task-history > summary {
+  cursor: pointer;
+  user-select: none;
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.85rem;
+}
+.task-history-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 18rem;
+  overflow-y: auto;
+}
+.task-history-entry {
+  border-left: 2px solid var(--border);
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8rem;
+}
+.task-history-meta {
+  margin-bottom: 0.2rem;
+}
+.task-history-diff {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.task-history-from {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+.task-history-to {
+  color: var(--text);
+}
+
+.blocking-list-field {
+  background: rgba(239, 68, 68, 0.06);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+}
+.blocking-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.25rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.85rem;
+}
+.blocking-link {
+  background: none;
+  border: 0;
+  color: rgba(99, 102, 241, 0.95);
+  cursor: pointer;
+  padding: 0;
+  font-size: inherit;
+  text-align: left;
+}
+.blocking-link:hover { text-decoration: underline; }
 
 .workflow-step-row {
   cursor: pointer;

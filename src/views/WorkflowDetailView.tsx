@@ -23,6 +23,7 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
   const [categories, setCategories] = useState<Category[]>([])
   const [assignees, setAssignees]   = useState<Assignee[]>([])
   const [tagSuggestions, setTagSuggestions] = useState<string[]>([])
+  const [allTasks, setAllTasks]     = useState<Task[]>([])
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState<string | null>(null)
 
@@ -39,11 +40,12 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
   const reload = async () => {
     setError(null)
     try {
-      const [r, c, a, tg] = await Promise.all([
+      const [r, c, a, tg, allT] = await Promise.all([
         window.frame.db.getWorkflowInstance(instanceId),
         window.frame.db.listCategories(),
         window.frame.db.listAssignees(),
         window.frame.db.listTags(),
+        window.frame.db.listTasks(),
       ])
       if (!r.ok) {
         setError(r.error)
@@ -54,6 +56,7 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
       setCategories(c)
       setAssignees(a)
       setTagSuggestions(tg)
+      setAllTasks(allT)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -295,6 +298,7 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
           task={editing}
           childCount={0}
           autoChildren={[]}
+          allTasks={allTasks}
           categories={categories}
           assignees={assignees}
           tagSuggestions={tagSuggestions}

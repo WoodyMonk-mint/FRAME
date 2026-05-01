@@ -63,6 +63,8 @@ function taskRowToObject(r, assignees, tags) {
     recurrenceInterval:   r.recurrence_interval ?? null,
     autoCreateNext:       r.auto_create_next == null ? null : !!r.auto_create_next,
     sortOrder:            r.sort_order ?? null,
+    blockedByTaskId:      r.blocked_by_task_id ?? null,
+    blockedReason:        r.blocked_reason ?? null,
     title:                r.title,
     description:          r.description,
     status:               r.status,
@@ -742,6 +744,30 @@ function registerIpcHandlers() {
     ))
   })
 
+  ipcMain.handle('db:list-task-history', (_event, taskId) => {
+    if (!db) return []
+    const rows = db.prepare(`
+      SELECT id, action, changed_by, old_values, new_values, changed_at
+      FROM audit_log
+      WHERE table_name = 'tasks' AND row_id = ?
+      ORDER BY changed_at DESC, id DESC
+    `).all(taskId)
+    const safeParse = (s) => {
+      if (!s) return null
+      try { return JSON.parse(s) } catch { return null }
+    }
+    return rows.map(r => ({
+      id:        r.id,
+      action:    r.action,
+      changedBy: r.changed_by,
+      oldValues: safeParse(r.old_values),
+      newValues: safeParse(r.new_values),
+      // Renamed in the IPC layer — the renderer expects `createdAt` for
+      // consistency with how it formats timestamps elsewhere.
+      createdAt: r.changed_at,
+    }))
+  })
+
   ipcMain.handle('db:list-tags', () => {
     if (!db) return []
     return db.prepare(`
@@ -762,10 +788,12 @@ function registerIpcHandlers() {
         const ins = db.prepare(`
           INSERT INTO tasks (
             type, category_id, parent_task_id, title, description, status, priority,
-            primary_owner, due_date, percent_complete, percent_manual, notes
+            primary_owner, due_date, percent_complete, percent_manual, notes,
+            blocked_by_task_id, blocked_reason
           ) VALUES (
             'one-off', @categoryId, @parentTaskId, @title, @description, @status, @priority,
-            @primaryOwner, @dueDate, @percentComplete, @percentManual, @notes
+            @primaryOwner, @dueDate, @percentComplete, @percentManual, @notes,
+            @blockedByTaskId, @blockedReason
           )
         `)
         const result = ins.run({
@@ -780,6 +808,8 @@ function registerIpcHandlers() {
           percentComplete: input.percentComplete ?? 0,
           percentManual:   input.percentManual ? 1 : 0,
           notes:           input.notes ?? null,
+          blockedByTaskId: input.blockedByTaskId ?? null,
+          blockedReason:   input.blockedReason ?? null,
         })
         newId = Number(result.lastInsertRowid)
 
@@ -851,6 +881,8 @@ function registerIpcHandlers() {
           description:     'description',
           notes:           'notes',
           completedDate:   'completed_date',
+          blockedByTaskId: 'blocked_by_task_id',
+          blockedReason:   'blocked_reason',
         }
         for (const [tsKey, sqlKey] of Object.entries(map)) {
           if (Object.prototype.hasOwnProperty.call(patch, tsKey)) {

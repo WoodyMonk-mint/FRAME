@@ -30,6 +30,7 @@ export function RecurringDetailView({ templateId, onBack }: Props) {
   const [categories, setCategories] = useState<Category[]>([])
   const [assignees, setAssignees]   = useState<Assignee[]>([])
   const [tagSuggestions, setTagSuggestions] = useState<string[]>([])
+  const [allTasks, setAllTasks]     = useState<Task[]>([])
   const [loading, setLoading]       = useState(true)
   const [error, setError]           = useState<string | null>(null)
 
@@ -45,11 +46,12 @@ export function RecurringDetailView({ templateId, onBack }: Props) {
   const reload = async () => {
     setError(null)
     try {
-      const [r, cats, asn, tags] = await Promise.all([
+      const [r, cats, asn, tags, allT] = await Promise.all([
         window.frame.db.getRecurrenceTemplate(templateId),
         window.frame.db.listCategories(),
         window.frame.db.listAssignees(),
         window.frame.db.listTags(),
+        window.frame.db.listTasks(),
       ])
       if (!r.ok) { setError(r.error); return }
       setTemplate(r.template)
@@ -58,6 +60,7 @@ export function RecurringDetailView({ templateId, onBack }: Props) {
       setCategories(cats)
       setAssignees(asn)
       setTagSuggestions(tags)
+      setAllTasks(allT)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -290,6 +293,7 @@ export function RecurringDetailView({ templateId, onBack }: Props) {
           task={editing}
           childCount={0}
           autoChildren={[]}
+          allTasks={allTasks}
           categories={categories}
           assignees={assignees}
           tagSuggestions={tagSuggestions}
@@ -305,6 +309,7 @@ export function RecurringDetailView({ templateId, onBack }: Props) {
           parent={template}
           childCount={0}
           autoChildren={[]}
+          allTasks={allTasks}
           categories={categories}
           assignees={assignees}
           tagSuggestions={tagSuggestions}

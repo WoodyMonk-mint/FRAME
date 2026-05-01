@@ -6,6 +6,7 @@ import type {
 import { ALL_PRIORITIES, ALL_STATUSES } from '../types'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { MarkDoneDialog } from '../components/MarkDoneDialog'
+import { RecurrenceDialog } from '../components/RecurrenceDialog'
 import { WorkflowDialog } from '../components/WorkflowDialog'
 import { TaskModal } from '../components/TaskModal'
 import { PriorityPill, StatusPill } from '../components/Pills'
@@ -96,6 +97,11 @@ export function TaskListView({ onOpenWorkflow }: TaskListProps = {}) {
   const [loading, setLoading]       = useState(true)
   const [error, setError]           = useState<string | null>(null)
   const [newWorkflowOpen, setNewWorkflowOpen] = useState(false)
+  const [newRecurringOpen, setNewRecurringOpen] = useState(false)
+  // When true, every task — including subtasks and workflow step-tasks —
+  // renders at top level so they're individually visible. Parents (and
+  // workflow synthetic rows) drop out so the user can scan a flat list.
+  const [hideParents, setHideParents] = useState(false)
 
   const [expandedIds, setExpandedIds]                 = useState<Set<number>>(new Set())
   const [expandedWorkflowIds, setExpandedWorkflowIds] = useState<Set<number>>(new Set())
@@ -319,20 +325,24 @@ export function TaskListView({ onOpenWorkflow }: TaskListProps = {}) {
   // The unified row list: real top-level tasks + synthetic workflow rows.
   // Recurrence templates are hidden from the Task List — they live in the
   // Recurring view. Their occurrences (recurrenceTemplateId set) appear here.
+  // In hideParents mode every task — including subtasks and workflow steps —
+  // gets a top-level slot, and the synthetic workflow rows are dropped.
   const topRows = useMemo<TopRow[]>(() => {
     const rows: TopRow[] = []
     for (const t of tasks) {
       const isRecurrenceTemplate = t.recurrenceUnit !== null && t.recurrenceTemplateId === null
-      if (t.parentTaskId === null
-          && t.workflowInstanceId === null
-          && !isRecurrenceTemplate
-          && passesFilters(t, filters)) {
+      if (isRecurrenceTemplate) continue
+      if (!passesFilters(t, filters)) continue
+      const isTopLevel = t.parentTaskId === null && t.workflowInstanceId === null
+      if (hideParents || isTopLevel) {
         rows.push({ kind: 'task', task: t })
       }
     }
-    for (const w of workflows) {
-      if (passesWorkflowFilters(w, filters)) {
-        rows.push({ kind: 'workflow', instance: w })
+    if (!hideParents) {
+      for (const w of workflows) {
+        if (passesWorkflowFilters(w, filters)) {
+          rows.push({ kind: 'workflow', instance: w })
+        }
       }
     }
     if (!filters.sortBy || !filters.sortDir) return rows
@@ -343,7 +353,7 @@ export function TaskListView({ onOpenWorkflow }: TaskListProps = {}) {
       return filters.sortDir === 'desc' ? -cmp : cmp
     })
     return sorted
-  }, [tasks, workflows, filters, allChildrenByParent])
+  }, [tasks, workflows, filters, allChildrenByParent, hideParents])
 
   // Click-to-cycle: unsorted → asc → desc → unsorted (back to IPC default order).
   const cycleSort = (col: NonNullable<SortColumn>) => {
@@ -512,6 +522,26 @@ export function TaskListView({ onOpenWorkflow }: TaskListProps = {}) {
     if (!r.ok && !r.cancelled) setError(r.error ?? 'Export failed')
   }
 
+  // Lookup helper for the title-cell parent prefix. Hooks defined before
+  // the early-return guard so the order stays stable across renders.
+  const tasksById     = useMemo(() => new Map(tasks.map(t => [t.id, t])),     [tasks])
+  const workflowsById = useMemo(() => new Map(workflows.map(w => [w.id, w])), [workflows])
+  const parentLabelFor = (t: Task): string | undefined => {
+    if (t.workflowInstanceId != null) {
+      const w = workflowsById.get(t.workflowInstanceId)
+      if (!w) return undefined
+      return [
+        w.name,
+        w.gateType   ? `(${w.gateType})`  : null,
+        w.projectRef ? `· ${w.projectRef}` : null,
+      ].filter(Boolean).join(' ')
+    }
+    if (t.parentTaskId != null) {
+      return tasksById.get(t.parentTaskId)?.title
+    }
+    return undefined
+  }
+
   // Sets of IDs for parents and workflows that have something to expand
   // (children matching the current filter, or any steps). Defined here,
   // before any early return, so hook order stays stable across renders.
@@ -583,13 +613,22 @@ export function TaskListView({ onOpenWorkflow }: TaskListProps = {}) {
             aria-label="Expand all"
             title="Expand all"
           >⊞</button>
+          <button
+            className="chip"
+            onClick={() => setHideParents(v => !v)}
+            title={hideParents ? 'Show parent rows + nested children' : 'Show every task at top level'}
+          >{hideParents ? 'Show parents' : 'Hide parents'}</button>
           <button className="chip" onClick={exportCsv}>Export CSV</button>
+          <button
+            className="chip"
+            onClick={() => setNewRecurringOpen(true)}
+          >+ Add recurring</button>
           <button
             className="chip"
             onClick={() => setNewWorkflowOpen(true)}
             disabled={templates.length === 0}
             title={templates.length === 0 ? 'No templates available' : undefined}
-          >+ New workflow</button>
+          >+ Add workflow</button>
           <button className="primary-button" onClick={() => setModal({ kind: 'add' })}>+ Add task</button>
         </div>
       </header>
@@ -748,6 +787,25 @@ export function TaskListView({ onOpenWorkflow }: TaskListProps = {}) {
                     {!collapsed && g.rows.map(r => {
                       if (r.kind === 'task') {
                         const t = r.task
+                        // Flat-mode: render the task as a leaf row with the
+                        // parent label as a prefix so it stays identifiable.
+                        if (hideParents) {
+                          return (
+                            <TaskRow
+                              key={`flat-${t.id}`}
+                              task={t}
+                              depth={0}
+                              canExpand={false}
+                              isExpanded={false}
+                              onToggle={() => {}}
+                              categoryColour={categories.find(c => c.id === t.categoryId)?.colour ?? null}
+                              onOpen={() => setModal({ kind: 'edit', task: t })}
+                              onContextMenu={(x, y) => setCtxMenu({ task: t, x, y })}
+                              displayPercent={t.percentComplete}
+                              parentTitle={parentLabelFor(t)}
+                            />
+                          )
+                        }
                         const children = childrenByParent.get(t.id) ?? []
                         const isExpanded = expandedIds.has(t.id)
                         return (
@@ -798,6 +856,8 @@ export function TaskListView({ onOpenWorkflow }: TaskListProps = {}) {
           parent={modal.kind === 'add-subtask' ? modal.parent : undefined}
           childCount={modal.kind === 'edit' ? (allChildrenByParent.get(modal.task.id)?.length ?? 0) : 0}
           autoChildren={modal.kind === 'edit' ? (allChildrenByParent.get(modal.task.id) ?? []) : []}
+          allTasks={tasks}
+          onOpenTask={(t) => setModal({ kind: 'edit', task: t })}
           categories={categories}
           assignees={assignees}
           tagSuggestions={tagSuggestions}
@@ -848,6 +908,22 @@ export function TaskListView({ onOpenWorkflow }: TaskListProps = {}) {
             const r = await window.frame.db.createWorkflowInstance(input)
             if (!r.ok) throw new Error(r.error ?? 'Create failed')
             setNewWorkflowOpen(false)
+            await reload()
+          }}
+        />
+      )}
+
+      {newRecurringOpen && (
+        <RecurrenceDialog
+          mode="create"
+          categories={categories}
+          assignees={assignees}
+          tagSuggestions={tagSuggestions}
+          onCancel={() => setNewRecurringOpen(false)}
+          onSubmit={async (input) => {
+            const r = await window.frame.db.createRecurrenceTemplate(input)
+            if (!r.ok) throw new Error(r.error ?? 'Create failed')
+            setNewRecurringOpen(false)
             await reload()
           }}
         />
@@ -1091,6 +1167,7 @@ function RowGroup({
             onOpen={() => onOpen(c)}
             onContextMenu={(x, y) => onContextMenu(c, x, y)}
             displayPercent={c.percentComplete}
+            parentTitle={task.title}
             draggable
             isDragging={dragging}
             isDragOver={dragOver}
@@ -1157,6 +1234,13 @@ function WorkflowRowGroup({
 }) {
   const status = isKnownStatus(instance.status) ? instance.status : 'WIP'
   const overdue = isOverdue(instance.targetDate, status)
+  // Step rows in the Task List get this prefix so they're identifiable
+  // when seen out of context. Includes gate type + project ref where set.
+  const stepParentLabel = [
+    instance.name,
+    instance.gateType   ? `(${instance.gateType})`  : null,
+    instance.projectRef ? `· ${instance.projectRef}` : null,
+  ].filter(Boolean).join(' ')
   const titleSuffix = [
     instance.gateType   ? `(${instance.gateType})`         : null,
     instance.projectRef ? `· ${instance.projectRef}`        : null,
@@ -1230,6 +1314,7 @@ function WorkflowRowGroup({
           onContextMenu={(x, y) => onContextMenu(s, x, y)}
           displayPercent={s.percentComplete}
           stepNumber={s.workflowStepNumber}
+          parentTitle={stepParentLabel}
         />
       ))}
     </>
@@ -1239,7 +1324,7 @@ function WorkflowRowGroup({
 function TaskRow({
   task, depth, canExpand, isExpanded, onToggle,
   categoryColour, onOpen, onContextMenu,
-  displayPercent, stepNumber,
+  displayPercent, stepNumber, parentTitle,
   draggable, isDragging, isDragOver,
   onDragStart, onDragOver, onDragEnd, onDrop,
 }: {
@@ -1253,6 +1338,7 @@ function TaskRow({
   onContextMenu:   (x: number, y: number) => void
   displayPercent:  number
   stepNumber?:     number | null
+  parentTitle?:    string
   draggable?:      boolean
   isDragging?:     boolean
   isDragOver?:     boolean
@@ -1296,11 +1382,14 @@ function TaskRow({
         )}
       </td>
       <td>
-        {!isSubtask && (
-          task.recurrenceTemplateId != null
-            ? <span className="type-badge type-badge-recurring">Recurring</span>
-            : <span className="type-badge type-badge-task">Task</span>
-        )}
+        {task.workflowInstanceId != null
+          ? <span className="type-badge type-badge-workflow">Step</span>
+          : task.parentTaskId != null
+            ? <span className="type-badge type-badge-task">Subtask</span>
+            : task.recurrenceTemplateId != null
+              ? <span className="type-badge type-badge-recurring">Recurring</span>
+              : <span className="type-badge type-badge-task">Task</span>
+        }
       </td>
       <td className="task-title-cell">
         <span style={{ paddingLeft: `${depth * 1.25}rem`, display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -1326,7 +1415,19 @@ function TaskRow({
           {stepNumber != null && (
             <span className="workflow-step-number muted compact">{stepNumber}.</span>
           )}
-          {task.title}
+          {task.status === 'BLOCKED' && (
+            <span
+              className="blocked-icon"
+              title={task.blockedReason ?? 'Blocked'}
+              aria-label="Blocked"
+            >⛔</span>
+          )}
+          <span className="task-title-text">
+            {parentTitle && (
+              <span className="task-parent-context muted compact">{parentTitle}: </span>
+            )}
+            {task.title}
+          </span>
         </span>
       </td>
       <td><StatusPill status={task.status} /></td>

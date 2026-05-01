@@ -48,6 +48,8 @@ export type Task = {
   recurrenceInterval:   number | null
   autoCreateNext:       boolean | null
   sortOrder:            number | null
+  blockedByTaskId:      number | null
+  blockedReason:        string | null
   title:                string
   description:        string | null
   status:             Status
@@ -65,23 +67,34 @@ export type Task = {
 }
 
 export type TaskInput = {
-  title:           string
-  categoryId:      number | null
-  parentTaskId?:   number | null
-  primaryOwner:    string | null
-  assignees:       string[]
-  tags:            string[]
-  status:          Status
-  priority:        Priority | null
-  dueDate:         string | null
-  percentComplete: number
-  percentManual:   boolean
-  description:     string | null
-  notes:           string | null
+  title:            string
+  categoryId:       number | null
+  parentTaskId?:    number | null
+  primaryOwner:     string | null
+  assignees:        string[]
+  tags:             string[]
+  status:           Status
+  priority:         Priority | null
+  dueDate:          string | null
+  percentComplete:  number
+  percentManual:    boolean
+  description:      string | null
+  notes:            string | null
+  blockedByTaskId?: number | null
+  blockedReason?:   string | null
 }
 
 export type TaskPatch = Partial<TaskInput> & {
   completedDate?: string | null
+}
+
+export type TaskHistoryEntry = {
+  id:         number
+  action:     string
+  changedBy:  string | null
+  oldValues:  Record<string, unknown> | null
+  newValues:  Record<string, unknown> | null
+  createdAt:  string
 }
 
 // ─── Workflows ──────────────────────────────────────────────────────────────
