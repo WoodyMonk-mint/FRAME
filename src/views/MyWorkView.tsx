@@ -1,0 +1,413 @@
+import { useEffect, useMemo, useState } from 'react'
+import type {
+  Assignee, Category, Task, TaskInput, WorkflowInstance,
+} from '../types'
+import { ConfirmDialog } from '../components/ConfirmDialog'
+import { MarkDoneDialog } from '../components/MarkDoneDialog'
+import { TaskModal } from '../components/TaskModal'
+import {
+  AssigneePile, PriorityPill, StatusPill, TagCellPile,
+} from '../components/Pills'
+import { formatDate, isOverdue, todayIso } from '../lib/date'
+
+const ACTIVE_USER_KEY = 'frame.activeUser'
+
+type Props = {
+  onJumpToSettings?: () => void
+}
+
+type BucketKey = 'overdue' | 'today' | 'this-week' | 'later' | 'no-date'
+
+const BUCKET_META: Record<BucketKey, { label: string; subtitle: string }> = {
+  'overdue':   { label: 'Overdue',     subtitle: 'past due, still open' },
+  'today':     { label: 'Today',       subtitle: 'due today' },
+  'this-week': { label: 'This week',   subtitle: 'next 7 days' },
+  'later':     { label: 'Later',       subtitle: 'beyond next week' },
+  'no-date':   { label: 'No due date', subtitle: 'no deadline set' },
+}
+
+const BUCKET_ORDER: BucketKey[] = ['overdue', 'today', 'this-week', 'later', 'no-date']
+
+function nextWeekIso(): string {
+  const d = new Date(todayIso() + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() + 7)
+  return d.toISOString().slice(0, 10)
+}
+
+function bucketFor(t: Task): BucketKey {
+  if (!t.dueDate)                            return 'no-date'
+  if (isOverdue(t.dueDate, t.status))        return 'overdue'
+  const today = todayIso()
+  if (t.dueDate === today)                    return 'today'
+  if (t.dueDate <= nextWeekIso())             return 'this-week'
+  return 'later'
+}
+
+const PRIORITY_ORDER = ['P0', 'P1', 'P2', 'P3', null] as const
+function priorityIndex(p: string | null): number {
+  const i = (PRIORITY_ORDER as readonly (string | null)[]).indexOf(p)
+  return i < 0 ? PRIORITY_ORDER.length : i
+}
+
+export function MyWorkView({ onJumpToSettings }: Props = {}) {
+  const [activeUser, setActiveUser] = useState<string | null>(() =>
+    localStorage.getItem(ACTIVE_USER_KEY) || null
+  )
+
+  const [tasks, setTasks]           = useState<Task[]>([])
+  const [workflows, setWorkflows]   = useState<WorkflowInstance[]>([])
+  const [categories, setCategories] = useState<Category[]>([])
+  const [assignees, setAssignees]   = useState<Assignee[]>([])
+  const [tagSuggestions, setTagSuggestions] = useState<string[]>([])
+  const [loading, setLoading]       = useState(true)
+  const [error, setError]           = useState<string | null>(null)
+
+  const [editing, setEditing]             = useState<Task | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<Task | null>(null)
+  const [confirmDone, setConfirmDone]     = useState<Task | null>(null)
+
+  const reload = async () => {
+    setError(null)
+    try {
+      const [t, w, c, a, tg] = await Promise.all([
+        window.frame.db.listTasks(),
+        window.frame.db.listWorkflowInstances(),
+        window.frame.db.listCategories(),
+        window.frame.db.listAssignees(),
+        window.frame.db.listTags(),
+      ])
+      setTasks(t)
+      setWorkflows(w)
+      setCategories(c)
+      setAssignees(a)
+      setTagSuggestions(tg)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { void reload() }, [])
+
+  // Re-read the localStorage value whenever the user navigates here so a
+  // change in Settings → General surfaces immediately.
+  useEffect(() => {
+    const onFocus = () => setActiveUser(localStorage.getItem(ACTIVE_USER_KEY) || null)
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [])
+
+  const myTasks = useMemo(() => {
+    if (!activeUser) return []
+    return tasks.filter(t => {
+      if (t.recurrenceUnit !== null && t.recurrenceTemplateId === null) return false  // template
+      if (t.status === 'DONE' || t.status === 'CANCELLED')               return false
+      if (t.primaryOwner === activeUser) return true
+      if (t.assignees.includes(activeUser)) return true
+      return false
+    })
+  }, [tasks, activeUser])
+
+  const buckets = useMemo(() => {
+    const m: Record<BucketKey, Task[]> = {
+      'overdue': [], 'today': [], 'this-week': [], 'later': [], 'no-date': [],
+    }
+    for (const t of myTasks) m[bucketFor(t)].push(t)
+    for (const k of BUCKET_ORDER) {
+      m[k].sort((a, b) => {
+        const p = priorityIndex(a.priority) - priorityIndex(b.priority)
+        if (p !== 0) return p
+        return (a.dueDate ?? '9999-99-99').localeCompare(b.dueDate ?? '9999-99-99')
+      })
+    }
+    return m
+  }, [myTasks])
+
+  // Lookup helpers for parent context shown next to subtasks / workflow steps.
+  const tasksById     = useMemo(() => new Map(tasks.map(t => [t.id, t])),         [tasks])
+  const workflowsById = useMemo(() => new Map(workflows.map(w => [w.id, w])),     [workflows])
+  const categoryById  = useMemo(() => new Map(categories.map(c => [c.id, c])),    [categories])
+
+  const parentLabelFor = (t: Task): string | null => {
+    if (t.workflowInstanceId != null) {
+      const w = workflowsById.get(t.workflowInstanceId)
+      if (!w) return null
+      return [
+        w.name,
+        w.gateType   ? `(${w.gateType})`  : null,
+        w.projectRef ? `· ${w.projectRef}` : null,
+      ].filter(Boolean).join(' ')
+    }
+    if (t.parentTaskId != null) return tasksById.get(t.parentTaskId)?.title ?? null
+    return null
+  }
+
+  const typeBadgeFor = (t: Task): { label: string; cls: string } => {
+    if (t.workflowInstanceId   != null) return { label: 'Step',      cls: 'type-badge-workflow' }
+    if (t.parentTaskId         != null) return { label: 'Subtask',   cls: 'type-badge-task' }
+    if (t.recurrenceTemplateId != null) return { label: 'Recurring', cls: 'type-badge-recurring' }
+    return { label: 'Task', cls: 'type-badge-task' }
+  }
+
+  // ─── Mutations ───────────────────────────────────────────────────────────
+
+  const saveEdited = async (input: TaskInput, opts: { setCompletedToToday: boolean }) => {
+    if (!editing) return
+    const patch = { ...input } as Parameters<typeof window.frame.db.updateTask>[1]
+    if (opts.setCompletedToToday) patch.completedDate = todayIso()
+    if (input.status !== 'DONE' && editing.status === 'DONE') patch.completedDate = null
+    const r = await window.frame.db.updateTask(editing.id, patch)
+    if (!r.ok) throw new Error(r.error ?? 'Update failed')
+    setEditing(null)
+    await reload()
+  }
+
+  const markDone = async (task: Task, completedDate: string, note: string, createNext?: boolean) => {
+    if (task.recurrenceTemplateId !== null) {
+      const r = await window.frame.db.completeRecurringOccurrence(
+        task.id, completedDate, note || null, !!createNext,
+      )
+      setConfirmDone(null)
+      if (!r.ok) { setError(r.error ?? 'Update failed'); return }
+      await reload()
+      return
+    }
+    const patch: Parameters<typeof window.frame.db.updateTask>[1] = {
+      status:          'DONE',
+      completedDate,
+      percentComplete: 100,
+    }
+    if (note) {
+      const stamped = `[${completedDate}] Done — ${note}`
+      patch.notes = task.notes && task.notes.trim()
+        ? `${stamped}\n\n${task.notes}`
+        : stamped
+    }
+    const r = await window.frame.db.updateTask(task.id, patch)
+    setConfirmDone(null)
+    if (!r.ok) { setError(r.error ?? 'Update failed'); return }
+    await reload()
+  }
+
+  const doDelete = async (task: Task) => {
+    setConfirmDelete(null)
+    const r = await window.frame.db.softDeleteTask(task.id)
+    if (!r.ok) { setError(r.error ?? 'Delete failed'); return }
+    setEditing(null)
+    await reload()
+  }
+
+  if (loading) {
+    return <div className="view-empty"><p className="muted">Loading…</p></div>
+  }
+
+  if (!activeUser) {
+    return (
+      <div className="task-view">
+        <header className="view-header">
+          <h1>My Work</h1>
+        </header>
+        <div className="view-empty">
+          <p className="muted compact">
+            Pick yourself in <strong>Settings → General → Active user</strong> to see this view.
+          </p>
+          {onJumpToSettings && (
+            <p style={{ marginTop: '0.5rem' }}>
+              <button className="primary-button" onClick={onJumpToSettings}>Open Settings</button>
+            </p>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  const overdueCount   = buckets.overdue.length
+  const todayCount     = buckets.today.length
+  const thisWeekCount  = buckets['this-week'].length
+  const totalOpen      = myTasks.length
+
+  return (
+    <div className="task-view">
+      <header className="view-header view-header-row">
+        <div>
+          <h1>My Work</h1>
+          <p className="muted compact">
+            {activeUser} · {totalOpen} open task{totalOpen === 1 ? '' : 's'}
+          </p>
+        </div>
+      </header>
+
+      {error && <div className="setup-error" style={{ margin: '1rem 2rem 0' }}>{error}</div>}
+
+      <div className="my-work-cards">
+        <div className={`dashboard-card ${overdueCount  > 0 ? 'dashboard-card-danger' : ''}`}>
+          <div className="dashboard-card-value">{overdueCount}</div>
+          <div className="dashboard-card-label">Overdue</div>
+        </div>
+        <div className={`dashboard-card ${todayCount    > 0 ? 'dashboard-card-warn'   : ''}`}>
+          <div className="dashboard-card-value">{todayCount}</div>
+          <div className="dashboard-card-label">Due today</div>
+        </div>
+        <div className="dashboard-card">
+          <div className="dashboard-card-value">{thisWeekCount}</div>
+          <div className="dashboard-card-label">Due this week</div>
+        </div>
+        <div className="dashboard-card">
+          <div className="dashboard-card-value">{totalOpen}</div>
+          <div className="dashboard-card-label">My open</div>
+        </div>
+      </div>
+
+      {totalOpen === 0 ? (
+        <p className="muted compact" style={{ padding: '0 2rem' }}>Nothing assigned to you right now.</p>
+      ) : (
+        <div className="task-table-wrap">
+          <table className="task-table">
+            <thead>
+              <tr>
+                <th style={{ width: '0.6rem' }} aria-label="Category" />
+                <th style={{ width: '5.5rem' }}>Type</th>
+                <th>Title</th>
+                <th style={{ width: '7rem' }}>Status</th>
+                <th style={{ width: '7.5rem' }}>%</th>
+                <th style={{ width: '4rem' }}>Pri</th>
+                <th style={{ width: '8rem' }}>Due</th>
+                <th style={{ width: '8rem' }}>Owner</th>
+                <th style={{ width: '9rem' }}>Team</th>
+                <th style={{ width: '11rem' }}>Tags</th>
+              </tr>
+            </thead>
+            <tbody>
+              {BUCKET_ORDER.map(key => {
+                const list = buckets[key]
+                if (list.length === 0) return null
+                const meta = BUCKET_META[key]
+                return (
+                  <Bucket
+                    key={key}
+                    label={meta.label}
+                    subtitle={meta.subtitle}
+                    list={list}
+                    categoryById={categoryById}
+                    parentLabelFor={parentLabelFor}
+                    typeBadgeFor={typeBadgeFor}
+                    onOpen={(t) => setEditing(t)}
+                  />
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {editing && (
+        <TaskModal
+          mode="edit"
+          task={editing}
+          childCount={0}
+          autoChildren={[]}
+          allTasks={tasks}
+          allWorkflows={workflows}
+          onOpenTask={(t) => setEditing(t)}
+          categories={categories}
+          assignees={assignees}
+          tagSuggestions={tagSuggestions}
+          onCancel={() => setEditing(null)}
+          onSave={saveEdited}
+          onDelete={() => setConfirmDelete(editing)}
+        />
+      )}
+
+      {confirmDelete && (
+        <ConfirmDialog
+          label="Delete task"
+          title={`Delete "${confirmDelete.title}"?`}
+          body="The task will be archived (soft-deleted). The audit log retains the full record."
+          confirmLabel="Delete"
+          danger
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => doDelete(confirmDelete)}
+        />
+      )}
+
+      {confirmDone && (
+        <MarkDoneDialog
+          taskTitle={confirmDone.title}
+          autoCreateNext={
+            confirmDone.recurrenceTemplateId !== null
+              ? (confirmDone.autoCreateNext ?? true)
+              : undefined
+          }
+          onCancel={() => setConfirmDone(null)}
+          onConfirm={(date, note, createNext) => markDone(confirmDone, date, note, createNext)}
+        />
+      )}
+    </div>
+  )
+}
+
+function Bucket({
+  label, subtitle, list, categoryById, parentLabelFor, typeBadgeFor, onOpen,
+}: {
+  label:           string
+  subtitle:        string
+  list:            Task[]
+  categoryById:    Map<number, Category>
+  parentLabelFor:  (t: Task) => string | null
+  typeBadgeFor:    (t: Task) => { label: string; cls: string }
+  onOpen:          (t: Task) => void
+}) {
+  return (
+    <>
+      <tr className="group-header">
+        <td colSpan={10}>
+          <span className="group-header-label">{label}</span>
+          <span className="group-header-count muted">({list.length})</span>
+          <span className="muted compact" style={{ marginLeft: '0.5rem' }}>· {subtitle}</span>
+        </td>
+      </tr>
+      {list.map(t => {
+        const cat     = categoryById.get(t.categoryId ?? -1)
+        const colour  = cat?.colour ?? 'var(--muted)'
+        const overdue = isOverdue(t.dueDate, t.status)
+        const parent  = parentLabelFor(t)
+        const badge   = typeBadgeFor(t)
+        return (
+          <tr key={t.id} className="task-row" onClick={() => onOpen(t)} style={{ cursor: 'pointer' }}>
+            <td className="my-work-colour-cell" title={cat?.name ?? '(No category)'}>
+              <span
+                className="my-work-colour-stripe"
+                style={{ background: overdue ? '#ef4444' : colour }}
+              />
+            </td>
+            <td><span className={`type-badge ${badge.cls}`}>{badge.label}</span></td>
+            <td className="task-title-cell">
+              <span className="task-title-text">
+                {parent && <span className="task-parent-context muted compact">{parent}: </span>}
+                {t.title}
+              </span>
+            </td>
+            <td><StatusPill status={t.status} /></td>
+            <td>
+              <span className="percent-cell">
+                <span className="percent-bar">
+                  <span
+                    className={`percent-bar-fill ${t.percentComplete === 100 ? 'is-done' : ''}`}
+                    style={{ width: `${t.percentComplete}%` }}
+                  />
+                </span>
+                <span className="percent-cell-num">{t.percentComplete}</span>
+              </span>
+            </td>
+            <td><PriorityPill priority={t.priority} /></td>
+            <td className={overdue ? 'overdue' : ''}>{formatDate(t.dueDate)}</td>
+            <td>{t.primaryOwner ?? <span className="muted">—</span>}</td>
+            <td><AssigneePile names={t.assignees} /></td>
+            <td><TagCellPile tags={t.tags} /></td>
+          </tr>
+        )
+      })}
+    </>
+  )
+}

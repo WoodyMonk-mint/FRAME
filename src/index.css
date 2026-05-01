@@ -6424,6 +6424,28 @@ button.dashboard-card.dashboard-card-clickable:active {
   transform: translateY(1px);
 }
 
+.my-work-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.75rem;
+  padding: 0 2rem 1rem;
+  max-width: 80rem;
+}
+
+/* Narrow first cell in the My Work table — pure colour stripe, no label. */
+.my-work-colour-cell {
+  padding: 0;
+  width: 0.6rem;
+}
+.my-work-colour-stripe {
+  display: block;
+  width: 4px;
+  height: 100%;
+  min-height: 1.5rem;
+  border-radius: 2px;
+  margin: 0 auto;
+}
+
 .dashboard-charts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));

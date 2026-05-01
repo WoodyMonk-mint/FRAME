@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ViewDef, ViewId } from './types'
 import { CalendarView } from './views/CalendarView'
 import { DashboardView } from './views/DashboardView'
+import { MyWorkView } from './views/MyWorkView'
 import { RecurringView } from './views/RecurringView'
 import { SettingsView } from './views/SettingsView'
 import { TaskListView } from './views/TaskListView'
@@ -11,10 +12,10 @@ import './index.css'
 // FRAME — Focus, Resource and Activity Management Engine
 
 const VIEWS: ViewDef[] = [
+  { id: 'my-work',   label: 'My Work' },
   { id: 'tasks',     label: 'Task List' },
   { id: 'workflows', label: 'Workflows' },
   { id: 'recurring', label: 'Recurring' },
-  { id: 'my-work',   label: 'My Work',   iterationNote: 'Coming in Iteration 9 — personal task view filtered to the active user.' },
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'calendar',  label: 'Calendar' },
   { id: 'settings',  label: 'Settings' },
@@ -23,7 +24,7 @@ const VIEWS: ViewDef[] = [
 function App() {
   const [status, setStatus]         = useState<DbStatusInfo | null>(null)
   const [busy, setBusy]             = useState(false)
-  const [activeView, setActiveView] = useState<ViewId>('tasks')
+  const [activeView, setActiveView] = useState<ViewId>('my-work')
   // Lifted so other views (e.g. Task List) can navigate to a specific
   // workflow by setting both the active view and the selected instance.
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<number | null>(null)
@@ -119,6 +120,8 @@ function App() {
               setActiveView('workflows')
             }}
           />
+        ) : view.id === 'my-work' ? (
+          <MyWorkView onJumpToSettings={() => setActiveView('settings')} />
         ) : view.id === 'settings' ? (
           <SettingsView />
         ) : (
