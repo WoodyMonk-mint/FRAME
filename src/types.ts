@@ -152,6 +152,23 @@ export type WorkflowStep = {
   task:               Task | null
 }
 
+export type NewWorkflowStepInput = {
+  title:            string
+  deviationReason?: string | null
+  description?:     string | null
+  primaryOwner?:    string | null
+  priority?:        Priority | null
+  dueDate?:         string | null
+}
+
+export type WorkflowNote = {
+  id:         number
+  instanceId: number
+  note:       string
+  author:     string | null
+  createdAt:  string
+}
+
 export type WorkflowInstanceDetail = {
   instance: WorkflowInstance
   steps:    WorkflowStep[]

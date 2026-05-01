@@ -419,6 +419,10 @@ function runMigrations() {
     db.exec('ALTER TABLE workflow_instances ADD COLUMN primary_owner TEXT')
     console.log('[DB] Added primary_owner column to workflow_instances')
   }
+  if (!wfCols.includes('is_deleted')) {
+    db.exec('ALTER TABLE workflow_instances ADD COLUMN is_deleted INTEGER DEFAULT 0')
+    console.log('[DB] Added is_deleted column to workflow_instances')
+  }
 }
 
 // ─── Core: open, integrity-check, schema, seed ───────────────────────────────
@@ -896,6 +900,7 @@ function registerIpcHandlers() {
       FROM workflow_instances i
       LEFT JOIN workflow_templates t ON t.id = i.template_id
       LEFT JOIN categories c ON c.id = t.category_id
+      WHERE i.is_deleted = 0
       ORDER BY i.created_at DESC
     `).all()
     if (rows.length === 0) return []
@@ -945,7 +950,7 @@ function registerIpcHandlers() {
         FROM workflow_instances i
         LEFT JOIN workflow_templates t ON t.id = i.template_id
         LEFT JOIN categories c ON c.id = t.category_id
-        WHERE i.id = ?
+        WHERE i.id = ? AND i.is_deleted = 0
       `).get(id)
       if (!inst) throw new Error(`Workflow ${id} not found`)
 
@@ -1051,6 +1056,121 @@ function registerIpcHandlers() {
     }
   })
 
+  ipcMain.handle('db:soft-delete-workflow-instance', (_event, id) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const tx = db.transaction(() => {
+        const oldRow = db.prepare(
+          'SELECT * FROM workflow_instances WHERE id = ? AND is_deleted = 0'
+        ).get(id)
+        if (!oldRow) throw new Error(`Workflow ${id} not found`)
+
+        const taskIds = db.prepare(`
+          SELECT s.task_id AS id
+          FROM workflow_instance_steps s
+          WHERE s.instance_id = ?
+        `).all(id).map(r => r.id).filter(Boolean)
+
+        // Soft-delete the step tasks so they disappear from list-tasks too.
+        if (taskIds.length > 0) {
+          const ph = taskIds.map(() => '?').join(',')
+          db.prepare(`
+            UPDATE tasks SET is_deleted = 1, updated_at = datetime('now')
+            WHERE id IN (${ph}) AND is_deleted = 0
+          `).run(...taskIds)
+        }
+
+        db.prepare(`
+          UPDATE workflow_instances SET is_deleted = 1, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(id)
+
+        db.prepare(`
+          INSERT INTO audit_log (table_name, row_id, action, changed_by, old_values, new_values)
+          VALUES ('workflow_instances', ?, 'SOFT_DELETE', 'user', ?, ?)
+        `).run(
+          id,
+          JSON.stringify(oldRow),
+          JSON.stringify({ ...oldRow, is_deleted: 1, soft_deleted_task_ids: taskIds }),
+        )
+      })
+      tx()
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] soft-delete-workflow-instance failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:add-workflow-step', (_event, instanceId, input) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      let newStepId, newTaskId
+      const tx = db.transaction(() => {
+        const inst = db.prepare(`
+          SELECT i.*, t.category_id AS template_category_id
+          FROM workflow_instances i
+          LEFT JOIN workflow_templates t ON t.id = i.template_id
+          WHERE i.id = ?
+        `).get(instanceId)
+        if (!inst) throw new Error(`Workflow ${instanceId} not found`)
+
+        const title = String(input?.title ?? '').trim()
+        if (!title) throw new Error('Step title is required')
+        const reason = String(input?.deviationReason ?? '').trim() || null
+
+        const taskRes = db.prepare(`
+          INSERT INTO tasks (
+            type, category_id, workflow_instance_id, title, description,
+            status, priority, primary_owner, due_date, percent_complete
+          ) VALUES (
+            'workflow', @categoryId, @instanceId, @title, @description,
+            'PLANNING', @priority, @primaryOwner, @dueDate, 0
+          )
+        `).run({
+          categoryId:   inst.template_category_id ?? null,
+          instanceId,
+          title,
+          description:  input?.description ?? null,
+          priority:     input?.priority ?? null,
+          primaryOwner: input?.primaryOwner ?? null,
+          dueDate:      input?.dueDate ?? null,
+        })
+        newTaskId = Number(taskRes.lastInsertRowid)
+        if (input?.primaryOwner) {
+          db.prepare('INSERT INTO task_assignees (task_id, name) VALUES (?, ?)').run(newTaskId, input.primaryOwner)
+        }
+
+        const max = db.prepare(
+          'SELECT COALESCE(MAX(step_number), 0) AS m FROM workflow_instance_steps WHERE instance_id = ?'
+        ).get(instanceId).m
+        const stepRes = db.prepare(`
+          INSERT INTO workflow_instance_steps (instance_id, template_step_id, task_id, step_number, is_deviation, deviation_reason)
+          VALUES (?, NULL, ?, ?, 1, ?)
+        `).run(instanceId, newTaskId, max + 1, reason ?? null)
+        newStepId = Number(stepRes.lastInsertRowid)
+
+        db.prepare(`UPDATE workflow_instances SET updated_at = datetime('now') WHERE id = ?`).run(instanceId)
+        db.prepare(`
+          INSERT INTO audit_log (table_name, row_id, action, changed_by, new_values)
+          VALUES ('workflow_instance_steps', ?, 'INSERT', 'user', ?)
+        `).run(newStepId, JSON.stringify({
+          instance_id: instanceId,
+          task_id:     newTaskId,
+          step_number: max + 1,
+          is_deviation: 1,
+          deviation_reason: reason,
+          title,
+        }))
+      })
+      tx()
+      return { ok: true, stepId: newStepId, taskId: newTaskId }
+    } catch (err) {
+      console.error('[DB] add-workflow-step failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
   ipcMain.handle('db:update-workflow-instance', (_event, id, patch) => {
     if (!db) return { ok: false, error: 'Database not ready' }
     try {
@@ -1132,12 +1252,49 @@ function registerIpcHandlers() {
     }
   })
 
-  ipcMain.handle('db:reorder-workflow-steps', (_event, instanceId, orderedTaskIds) => {
+  ipcMain.handle('db:list-workflow-notes', (_event, instanceId) => {
+    if (!db) return []
+    return db.prepare(`
+      SELECT id, instance_id, note, author, created_at
+      FROM workflow_notes
+      WHERE instance_id = ?
+      ORDER BY created_at DESC, id DESC
+    `).all(instanceId).map(r => ({
+      id:         r.id,
+      instanceId: r.instance_id,
+      note:       r.note,
+      author:     r.author,
+      createdAt:  r.created_at,
+    }))
+  })
+
+  ipcMain.handle('db:add-workflow-note', (_event, instanceId, note, author) => {
     if (!db) return { ok: false, error: 'Database not ready' }
     try {
+      const trimmed = String(note ?? '').trim()
+      if (!trimmed) throw new Error('Note is required')
+      const inst = db.prepare('SELECT id FROM workflow_instances WHERE id = ?').get(instanceId)
+      if (!inst) throw new Error(`Workflow ${instanceId} not found`)
+      const r = db.prepare(`
+        INSERT INTO workflow_notes (instance_id, note, author)
+        VALUES (?, ?, ?)
+      `).run(instanceId, trimmed, author ?? null)
+      db.prepare(`UPDATE workflow_instances SET updated_at = datetime('now') WHERE id = ?`).run(instanceId)
+      return { ok: true, noteId: Number(r.lastInsertRowid) }
+    } catch (err) {
+      console.error('[DB] add-workflow-note failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:reorder-workflow-steps', (_event, instanceId, orderedTaskIds, reason) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      let flippedStepIds = []
       const tx = db.transaction(() => {
         const stepRows = db.prepare(`
-          SELECT s.id, s.task_id, s.template_step_id, ts.step_number AS template_step_number
+          SELECT s.id, s.task_id, s.template_step_id, s.is_deviation,
+                 ts.step_number AS template_step_number
           FROM workflow_instance_steps s
           LEFT JOIN workflow_template_steps ts ON ts.id = s.template_step_id
           WHERE s.instance_id = ?
@@ -1156,6 +1313,9 @@ function registerIpcHandlers() {
           SET step_number = ?, is_deviation = ?
           WHERE id = ?
         `)
+        const updReason = db.prepare(`
+          UPDATE workflow_instance_steps SET deviation_reason = ? WHERE id = ?
+        `)
         const updTask = db.prepare(`
           UPDATE tasks SET updated_at = datetime('now') WHERE id = ?
         `)
@@ -1163,8 +1323,7 @@ function registerIpcHandlers() {
           const newStepNumber = idx + 1
           const row = byTaskId.get(tid)
           // A reorder counts as a deviation only if we have a template baseline
-          // to compare against. Ad-hoc steps (no template_step_id) keep
-          // is_deviation as-is — they were already deviations from creation.
+          // to compare against. Ad-hoc steps (no template_step_id) stay flagged.
           let isDev = 0
           if (row.template_step_number != null) {
             isDev = newStepNumber !== row.template_step_number ? 1 : 0
@@ -1173,16 +1332,24 @@ function registerIpcHandlers() {
           }
           updStep.run(newStepNumber, isDev, row.id)
           updTask.run(tid)
+          if (isDev === 1 && !row.is_deviation) flippedStepIds.push(row.id)
         })
+
+        // Reason applies only to newly-flipped rows; existing reasons on
+        // already-deviating steps are preserved.
+        const trimmedReason = typeof reason === 'string' ? reason.trim() : ''
+        if (trimmedReason && flippedStepIds.length > 0) {
+          for (const sid of flippedStepIds) updReason.run(trimmedReason, sid)
+        }
 
         db.prepare(`UPDATE workflow_instances SET updated_at = datetime('now') WHERE id = ?`).run(instanceId)
         db.prepare(`
           INSERT INTO audit_log (table_name, row_id, action, changed_by, new_values)
           VALUES ('workflow_instances', ?, 'REORDER', 'user', ?)
-        `).run(instanceId, JSON.stringify({ orderedTaskIds }))
+        `).run(instanceId, JSON.stringify({ orderedTaskIds, reason: trimmedReason || null, flippedStepIds }))
       })
       tx()
-      return { ok: true }
+      return { ok: true, flippedStepIds }
     } catch (err) {
       console.error('[DB] reorder-workflow-steps failed:', err.message)
       return { ok: false, error: err.message }

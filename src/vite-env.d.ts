@@ -46,8 +46,16 @@ declare global {
     >
     updateWorkflowInstance: (id: number, patch: import('./types').WorkflowPatch) =>
       Promise<{ ok: boolean; error?: string }>
-    reorderWorkflowSteps:   (instanceId: number, orderedTaskIds: number[]) =>
+    softDeleteWorkflowInstance: (id: number) =>
       Promise<{ ok: boolean; error?: string }>
+    addWorkflowStep:        (instanceId: number, input: import('./types').NewWorkflowStepInput) =>
+      Promise<{ ok: boolean; stepId?: number; taskId?: number; error?: string }>
+    listWorkflowNotes:      (instanceId: number) =>
+      Promise<import('./types').WorkflowNote[]>
+    addWorkflowNote:        (instanceId: number, note: string, author?: string | null) =>
+      Promise<{ ok: boolean; noteId?: number; error?: string }>
+    reorderWorkflowSteps:   (instanceId: number, orderedTaskIds: number[], reason?: string | null) =>
+      Promise<{ ok: boolean; flippedStepIds?: number[]; error?: string }>
   }
 
   interface FrameAppApi {

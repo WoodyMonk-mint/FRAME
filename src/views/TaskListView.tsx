@@ -501,19 +501,21 @@ export function TaskListView() {
     filters.dueRange                   !== 'all'
 
   const workflowCount = topRows.filter(r => r.kind === 'workflow').length
+  const totalExpandable = expandableTaskIds.length + expandableWorkflowIds.length
   const allExpanded =
-    (expandableTaskIds.length === 0     || expandableTaskIds.every(id => expandedIds.has(id))) &&
-    (expandableWorkflowIds.length === 0 || expandableWorkflowIds.every(id => expandedWorkflowIds.has(id))) &&
-    (expandableTaskIds.length + expandableWorkflowIds.length > 0)
+    totalExpandable > 0 &&
+    expandableTaskIds.every(id => expandedIds.has(id)) &&
+    expandableWorkflowIds.every(id => expandedWorkflowIds.has(id))
+  const noneExpanded =
+    expandedIds.size === 0 && expandedWorkflowIds.size === 0
 
-  const toggleExpandAll = () => {
-    if (allExpanded) {
-      setExpandedIds(new Set())
-      setExpandedWorkflowIds(new Set())
-    } else {
-      setExpandedIds(new Set(expandableTaskIds))
-      setExpandedWorkflowIds(new Set(expandableWorkflowIds))
-    }
+  const collapseAll = () => {
+    setExpandedIds(new Set())
+    setExpandedWorkflowIds(new Set())
+  }
+  const expandAll = () => {
+    setExpandedIds(new Set(expandableTaskIds))
+    setExpandedWorkflowIds(new Set(expandableWorkflowIds))
   }
 
   return (
@@ -528,10 +530,21 @@ export function TaskListView() {
         </div>
         <div className="header-actions">
           <button
-            className="chip"
-            onClick={toggleExpandAll}
-            disabled={expandableTaskIds.length + expandableWorkflowIds.length === 0}
-          >{allExpanded ? 'Collapse all' : 'Expand all'}</button>
+            type="button"
+            className={`icon-toggle ${noneExpanded ? 'active' : ''}`}
+            onClick={collapseAll}
+            disabled={totalExpandable === 0}
+            aria-label="Collapse all"
+            title="Collapse all"
+          >⊟</button>
+          <button
+            type="button"
+            className={`icon-toggle ${allExpanded ? 'active' : ''}`}
+            onClick={expandAll}
+            disabled={totalExpandable === 0}
+            aria-label="Expand all"
+            title="Expand all"
+          >⊞</button>
           <button className="chip" onClick={exportCsv}>Export CSV</button>
           <button
             className="chip"

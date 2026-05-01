@@ -38,8 +38,16 @@ try {
       getWorkflowInstance:    (id)     => ipcRenderer.invoke('db:get-workflow-instance', id),
       updateWorkflowInstance: (id, patch) =>
         ipcRenderer.invoke('db:update-workflow-instance', id, patch),
-      reorderWorkflowSteps:   (instanceId, orderedTaskIds) =>
-        ipcRenderer.invoke('db:reorder-workflow-steps', instanceId, orderedTaskIds),
+      softDeleteWorkflowInstance: (id) =>
+        ipcRenderer.invoke('db:soft-delete-workflow-instance', id),
+      addWorkflowStep:        (instanceId, input) =>
+        ipcRenderer.invoke('db:add-workflow-step', instanceId, input),
+      listWorkflowNotes:      (instanceId) =>
+        ipcRenderer.invoke('db:list-workflow-notes', instanceId),
+      addWorkflowNote:        (instanceId, note, author) =>
+        ipcRenderer.invoke('db:add-workflow-note', instanceId, note, author),
+      reorderWorkflowSteps:   (instanceId, orderedTaskIds, reason) =>
+        ipcRenderer.invoke('db:reorder-workflow-steps', instanceId, orderedTaskIds, reason),
     },
   })
   console.log('[preload] window.frame exposed OK')

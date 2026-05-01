@@ -3,10 +3,12 @@ import type {
   Assignee, Category, Task, TaskInput,
   WorkflowInstance, WorkflowStep,
 } from '../types'
+import { AddStepDialog } from '../components/AddStepDialog'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { MarkDoneDialog } from '../components/MarkDoneDialog'
 import { TaskModal } from '../components/TaskModal'
 import { WorkflowDialog } from '../components/WorkflowDialog'
+import { WorkflowNotesFeed } from '../components/WorkflowNotesFeed'
 import { PriorityPill, StatusPill } from '../components/Pills'
 import { formatDate, isOverdue, todayIso } from '../lib/date'
 
@@ -28,6 +30,8 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
   const [confirmDelete, setConfirmDelete] = useState<Task | null>(null)
   const [confirmDone, setConfirmDone]     = useState<Task | null>(null)
   const [editWorkflowOpen, setEditWorkflowOpen] = useState(false)
+  const [addStepOpen, setAddStepOpen]     = useState(false)
+  const [confirmDeleteWorkflow, setConfirmDeleteWorkflow] = useState(false)
 
   const [dragIndex, setDragIndex]         = useState<number | null>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
@@ -100,10 +104,9 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
       void reload()
       return
     }
-    const r = await window.frame.db.reorderWorkflowSteps(instanceId, orderedTaskIds)
-    if (!r.ok) {
-      setError(r.error ?? 'Reorder failed')
-    }
+
+    const r = await window.frame.db.reorderWorkflowSteps(instanceId, orderedTaskIds, null)
+    if (!r.ok) setError(r.error ?? 'Reorder failed')
     void reload()
   }
 
@@ -196,7 +199,15 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
               {instance.doneSteps}/{instance.totalSteps} steps
             </span>
           </div>
+          <button className="chip" onClick={() => setAddStepOpen(true)}>+ Add step</button>
           <button className="chip" onClick={() => setEditWorkflowOpen(true)}>Edit workflow</button>
+          <button
+            type="button"
+            className="delete-icon-btn"
+            onClick={() => setConfirmDeleteWorkflow(true)}
+            aria-label="Delete workflow"
+            title="Delete workflow"
+          >×</button>
         </div>
       </header>
 
@@ -276,6 +287,8 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
         </table>
       </div>
 
+      <WorkflowNotesFeed instanceId={instanceId} />
+
       {editing && (
         <TaskModal
           mode="edit"
@@ -323,6 +336,36 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
             if (!r.ok) throw new Error(r.error ?? 'Update failed')
             setEditWorkflowOpen(false)
             await reload()
+          }}
+        />
+      )}
+
+      {addStepOpen && (
+        <AddStepDialog
+          assignees={assignees}
+          onCancel={() => setAddStepOpen(false)}
+          onSubmit={async (input) => {
+            const r = await window.frame.db.addWorkflowStep(instanceId, input)
+            if (!r.ok) throw new Error(r.error ?? 'Add step failed')
+            setAddStepOpen(false)
+            await reload()
+          }}
+        />
+      )}
+
+      {confirmDeleteWorkflow && instance && (
+        <ConfirmDialog
+          label="Delete workflow"
+          title={`Delete "${instance.name}"?`}
+          body={`The workflow and all ${instance.totalSteps} of its step task${instance.totalSteps === 1 ? '' : 's'} will be archived. The audit log retains the full record.`}
+          confirmLabel="Delete"
+          danger
+          onCancel={() => setConfirmDeleteWorkflow(false)}
+          onConfirm={async () => {
+            const r = await window.frame.db.softDeleteWorkflowInstance(instance.id)
+            setConfirmDeleteWorkflow(false)
+            if (!r.ok) { setError(r.error ?? 'Delete failed'); return }
+            onBack()
           }}
         />
       )}
