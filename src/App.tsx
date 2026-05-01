@@ -121,7 +121,13 @@ function App() {
             }}
           />
         ) : view.id === 'my-work' ? (
-          <MyWorkView onJumpToSettings={() => setActiveView('settings')} />
+          <MyWorkView
+            onJumpToSettings={() => setActiveView('settings')}
+            onOpenWorkflow={(id) => {
+              setSelectedWorkflowId(id)
+              setActiveView('workflows')
+            }}
+          />
         ) : view.id === 'settings' ? (
           <SettingsView />
         ) : (

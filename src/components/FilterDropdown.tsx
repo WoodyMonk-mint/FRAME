@@ -11,6 +11,7 @@ type Props = {
   onClose:    () => void
   onToggle:   (value: string) => void
   onShowAll:  () => void
+  onHideAll:  () => void
 }
 
 // One filter dimension. Renders a dropdown button whose label is highlighted
@@ -18,7 +19,7 @@ type Props = {
 // dash-filter-dropdown-wrap pattern so the inherited CSS styles it without
 // extra rules.
 export function FilterDropdown({
-  label, options, excluded, isOpen, onOpen, onClose, onToggle, onShowAll,
+  label, options, excluded, isOpen, onOpen, onClose, onToggle, onShowAll, onHideAll,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
 
@@ -60,15 +61,20 @@ export function FilterDropdown({
               <span>{o.label}</span>
             </label>
           ))}
-          {hasExclusions && (
-            <div className="dash-filter-dropdown-footer">
-              <button
-                type="button"
-                className="dash-filter-clear-all"
-                onClick={onShowAll}
-              >Show all</button>
-            </div>
-          )}
+          <div className="dash-filter-dropdown-footer">
+            <button
+              type="button"
+              className="dash-filter-clear-all"
+              onClick={onShowAll}
+              disabled={!hasExclusions}
+            >Select all</button>
+            <button
+              type="button"
+              className="dash-filter-clear-all"
+              onClick={onHideAll}
+              disabled={excluded.length === options.length}
+            >Unselect all</button>
+          </div>
         </div>
       )}
     </div>

@@ -225,6 +225,10 @@ export function TaskListView({
     updateFilters({ [key]: [] as unknown } as Partial<TaskFilters>)
   }
 
+  const hideAll = <K extends keyof TaskFilters>(key: K, allValues: unknown[]) => {
+    updateFilters({ [key]: allValues as unknown } as Partial<TaskFilters>)
+  }
+
   const clearAllFilters = () => {
     setFiltersState(DEFAULT_FILTERS)
     setActivePresetId(null)
@@ -677,6 +681,7 @@ export function TaskListView({
           onClose={() => setOpenDropdown(null)}
           onToggle={(v) => toggleExcluded('excludedStatuses', v as Status)}
           onShowAll={() => showAll('excludedStatuses')}
+          onHideAll={() => hideAll('excludedStatuses', [...ALL_STATUSES])}
         />
 
         <FilterDropdown
@@ -688,6 +693,7 @@ export function TaskListView({
           onClose={() => setOpenDropdown(null)}
           onToggle={(v) => toggleExcluded('excludedCategoryIds', Number(v))}
           onShowAll={() => showAll('excludedCategoryIds')}
+          onHideAll={() => hideAll('excludedCategoryIds', categories.filter(c => !c.isArchived).map(c => c.id))}
         />
 
         <FilterDropdown
@@ -699,6 +705,7 @@ export function TaskListView({
           onClose={() => setOpenDropdown(null)}
           onToggle={(v) => toggleExcluded('excludedPriorities', v as typeof filters.excludedPriorities[number])}
           onShowAll={() => showAll('excludedPriorities')}
+          onHideAll={() => hideAll('excludedPriorities', [...ALL_PRIORITIES])}
         />
 
         <FilterDropdown
@@ -710,6 +717,7 @@ export function TaskListView({
           onClose={() => setOpenDropdown(null)}
           onToggle={(v) => toggleExcluded('excludedOwners', v)}
           onShowAll={() => showAll('excludedOwners')}
+          onHideAll={() => hideAll('excludedOwners', ownerOptions.map(o => o.value))}
         />
 
         <SingleSelectDropdown
@@ -733,6 +741,7 @@ export function TaskListView({
             onClose={() => setOpenDropdown(null)}
             onToggle={(v) => toggleExcluded('excludedTags', v)}
             onShowAll={() => showAll('excludedTags')}
+            onHideAll={() => hideAll('excludedTags', [...tagSuggestions])}
           />
         )}
 
@@ -1406,7 +1415,9 @@ function TaskRow({
             ? <span className="type-badge type-badge-task">Subtask</span>
             : task.recurrenceTemplateId != null
               ? <span className="type-badge type-badge-recurring">Recurring</span>
-              : <span className="type-badge type-badge-task">Task</span>
+              : task.type === 'feature'
+                ? <span className="type-badge type-badge-feature">Feature</span>
+                : <span className="type-badge type-badge-task">Task</span>
         }
       </td>
       <td className="task-title-cell">

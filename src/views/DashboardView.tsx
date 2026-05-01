@@ -8,7 +8,7 @@ import type {
 } from '../types'
 import type { QuickFilterPreset } from '../lib/taskFilters'
 import { ALL_STATUSES } from '../types'
-import { isOverdue, todayIso } from '../lib/date'
+import { endOfWorkWeekIso, isOverdue, todayIso } from '../lib/date'
 
 const STATUS_LABEL: Record<Status, string> = {
   PLANNING: 'Planning', WIP: 'In progress', BLOCKED: 'Blocked',
@@ -99,17 +99,15 @@ export function DashboardView({ onJumpToTasks }: Props = {}) {
     const dueThisWeek: Task[] = []
     const blocked: Task[] = []
 
-    const today = todayIso()
-    const weekEnd = new Date(today + 'T00:00:00Z')
-    weekEnd.setUTCDate(weekEnd.getUTCDate() + 7)
-    const weekEndIso = weekEnd.toISOString().slice(0, 10)
+    const today    = todayIso()
+    const weekEnd  = endOfWorkWeekIso()  // working-week upper bound (Fri)
 
     for (const t of tasks) {
       if (!isCountable(t)) continue
       if (!isOpen(t)) continue
       open.push(t)
       if (isOverdue(t.dueDate, t.status))           overdue.push(t)
-      else if (t.dueDate && t.dueDate >= today && t.dueDate <= weekEndIso) dueThisWeek.push(t)
+      else if (t.dueDate && t.dueDate >= today && t.dueDate <= weekEnd) dueThisWeek.push(t)
       if (t.status === 'BLOCKED')                   blocked.push(t)
     }
     return { open, overdue, dueThisWeek, blocked }

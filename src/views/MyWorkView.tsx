@@ -8,12 +8,13 @@ import { TaskModal } from '../components/TaskModal'
 import {
   AssigneePile, PriorityPill, StatusPill, TagCellPile,
 } from '../components/Pills'
-import { formatDate, isOverdue, todayIso } from '../lib/date'
+import { endOfWorkWeekIso, formatDate, isOverdue, todayIso } from '../lib/date'
 
 const ACTIVE_USER_KEY = 'frame.activeUser'
 
 type Props = {
   onJumpToSettings?: () => void
+  onOpenWorkflow?:   (id: number) => void
 }
 
 type BucketKey = 'overdue' | 'today' | 'this-week' | 'later' | 'no-date'
@@ -21,26 +22,30 @@ type BucketKey = 'overdue' | 'today' | 'this-week' | 'later' | 'no-date'
 const BUCKET_META: Record<BucketKey, { label: string; subtitle: string }> = {
   'overdue':   { label: 'Overdue',     subtitle: 'past due, still open' },
   'today':     { label: 'Today',       subtitle: 'due today' },
-  'this-week': { label: 'This week',   subtitle: 'next 7 days' },
-  'later':     { label: 'Later',       subtitle: 'beyond next week' },
+  'this-week': { label: 'This week',   subtitle: 'through Friday' },
+  'later':     { label: 'Later',       subtitle: 'next week and beyond' },
   'no-date':   { label: 'No due date', subtitle: 'no deadline set' },
 }
 
 const BUCKET_ORDER: BucketKey[] = ['overdue', 'today', 'this-week', 'later', 'no-date']
 
-function nextWeekIso(): string {
-  const d = new Date(todayIso() + 'T00:00:00Z')
-  d.setUTCDate(d.getUTCDate() + 7)
-  return d.toISOString().slice(0, 10)
+type MyRow =
+  | { kind: 'task';     task: Task }
+  | { kind: 'workflow'; instance: WorkflowInstance }
+
+function bucketByDate(dueDate: string | null, status: string): BucketKey {
+  if (!dueDate)                                          return 'no-date'
+  if (isOverdue(dueDate, status as never))               return 'overdue'
+  const today = todayIso()
+  if (dueDate === today)                                  return 'today'
+  if (dueDate <= endOfWorkWeekIso())                      return 'this-week'
+  return 'later'
 }
 
-function bucketFor(t: Task): BucketKey {
-  if (!t.dueDate)                            return 'no-date'
-  if (isOverdue(t.dueDate, t.status))        return 'overdue'
-  const today = todayIso()
-  if (t.dueDate === today)                    return 'today'
-  if (t.dueDate <= nextWeekIso())             return 'this-week'
-  return 'later'
+function bucketForRow(r: MyRow): BucketKey {
+  return r.kind === 'task'
+    ? bucketByDate(r.task.dueDate, r.task.status)
+    : bucketByDate(r.instance.targetDate, r.instance.status)
 }
 
 const PRIORITY_ORDER = ['P0', 'P1', 'P2', 'P3', null] as const
@@ -49,7 +54,7 @@ function priorityIndex(p: string | null): number {
   return i < 0 ? PRIORITY_ORDER.length : i
 }
 
-export function MyWorkView({ onJumpToSettings }: Props = {}) {
+export function MyWorkView({ onJumpToSettings, onOpenWorkflow }: Props = {}) {
   const [activeUser, setActiveUser] = useState<string | null>(() =>
     localStorage.getItem(ACTIVE_USER_KEY) || null
   )
@@ -98,31 +103,41 @@ export function MyWorkView({ onJumpToSettings }: Props = {}) {
     return () => window.removeEventListener('focus', onFocus)
   }, [])
 
-  const myTasks = useMemo(() => {
+  const myRows = useMemo<MyRow[]>(() => {
     if (!activeUser) return []
-    return tasks.filter(t => {
-      if (t.recurrenceUnit !== null && t.recurrenceTemplateId === null) return false  // template
-      if (t.status === 'DONE' || t.status === 'CANCELLED')               return false
-      if (t.primaryOwner === activeUser) return true
-      if (t.assignees.includes(activeUser)) return true
-      return false
-    })
-  }, [tasks, activeUser])
+    const rows: MyRow[] = []
+    for (const t of tasks) {
+      if (t.recurrenceUnit !== null && t.recurrenceTemplateId === null) continue   // recurrence template
+      if (t.status === 'DONE' || t.status === 'CANCELLED')               continue
+      if (t.primaryOwner === activeUser || t.assignees.includes(activeUser)) {
+        rows.push({ kind: 'task', task: t })
+      }
+    }
+    for (const w of workflows) {
+      if (w.status === 'DONE' || w.status === 'CANCELLED') continue
+      if (w.primaryOwner === activeUser || w.assignees.includes(activeUser)) {
+        rows.push({ kind: 'workflow', instance: w })
+      }
+    }
+    return rows
+  }, [tasks, workflows, activeUser])
 
   const buckets = useMemo(() => {
-    const m: Record<BucketKey, Task[]> = {
+    const m: Record<BucketKey, MyRow[]> = {
       'overdue': [], 'today': [], 'this-week': [], 'later': [], 'no-date': [],
     }
-    for (const t of myTasks) m[bucketFor(t)].push(t)
+    for (const r of myRows) m[bucketForRow(r)].push(r)
+    const priorityOf = (r: MyRow) => r.kind === 'task' ? r.task.priority : r.instance.priority
+    const dueOf      = (r: MyRow) => r.kind === 'task' ? r.task.dueDate  : r.instance.targetDate
     for (const k of BUCKET_ORDER) {
       m[k].sort((a, b) => {
-        const p = priorityIndex(a.priority) - priorityIndex(b.priority)
+        const p = priorityIndex(priorityOf(a)) - priorityIndex(priorityOf(b))
         if (p !== 0) return p
-        return (a.dueDate ?? '9999-99-99').localeCompare(b.dueDate ?? '9999-99-99')
+        return (dueOf(a) ?? '9999-99-99').localeCompare(dueOf(b) ?? '9999-99-99')
       })
     }
     return m
-  }, [myTasks])
+  }, [myRows])
 
   // Lookup helpers for parent context shown next to subtasks / workflow steps.
   const tasksById     = useMemo(() => new Map(tasks.map(t => [t.id, t])),         [tasks])
@@ -147,6 +162,7 @@ export function MyWorkView({ onJumpToSettings }: Props = {}) {
     if (t.workflowInstanceId   != null) return { label: 'Step',      cls: 'type-badge-workflow' }
     if (t.parentTaskId         != null) return { label: 'Subtask',   cls: 'type-badge-task' }
     if (t.recurrenceTemplateId != null) return { label: 'Recurring', cls: 'type-badge-recurring' }
+    if (t.type === 'feature')           return { label: 'Feature',   cls: 'type-badge-feature' }
     return { label: 'Task', cls: 'type-badge-task' }
   }
 
@@ -225,7 +241,7 @@ export function MyWorkView({ onJumpToSettings }: Props = {}) {
   const overdueCount   = buckets.overdue.length
   const todayCount     = buckets.today.length
   const thisWeekCount  = buckets['this-week'].length
-  const totalOpen      = myTasks.length
+  const totalOpen      = myRows.length
 
   return (
     <div className="task-view">
@@ -293,6 +309,7 @@ export function MyWorkView({ onJumpToSettings }: Props = {}) {
                     parentLabelFor={parentLabelFor}
                     typeBadgeFor={typeBadgeFor}
                     onOpen={(t) => setEditing(t)}
+                    onOpenWorkflow={onOpenWorkflow}
                   />
                 )
               })}
@@ -348,15 +365,16 @@ export function MyWorkView({ onJumpToSettings }: Props = {}) {
 }
 
 function Bucket({
-  label, subtitle, list, categoryById, parentLabelFor, typeBadgeFor, onOpen,
+  label, subtitle, list, categoryById, parentLabelFor, typeBadgeFor, onOpen, onOpenWorkflow,
 }: {
   label:           string
   subtitle:        string
-  list:            Task[]
+  list:            MyRow[]
   categoryById:    Map<number, Category>
   parentLabelFor:  (t: Task) => string | null
   typeBadgeFor:    (t: Task) => { label: string; cls: string }
   onOpen:          (t: Task) => void
+  onOpenWorkflow?: (id: number) => void
 }) {
   return (
     <>
@@ -367,44 +385,95 @@ function Bucket({
           <span className="muted compact" style={{ marginLeft: '0.5rem' }}>· {subtitle}</span>
         </td>
       </tr>
-      {list.map(t => {
-        const cat     = categoryById.get(t.categoryId ?? -1)
-        const colour  = cat?.colour ?? 'var(--muted)'
-        const overdue = isOverdue(t.dueDate, t.status)
-        const parent  = parentLabelFor(t)
-        const badge   = typeBadgeFor(t)
+      {list.map(r => {
+        if (r.kind === 'task') {
+          const t       = r.task
+          const cat     = categoryById.get(t.categoryId ?? -1)
+          const colour  = cat?.colour ?? 'var(--muted)'
+          const overdue = isOverdue(t.dueDate, t.status)
+          const parent  = parentLabelFor(t)
+          const badge   = typeBadgeFor(t)
+          return (
+            <tr key={`t-${t.id}`} className="task-row" onClick={() => onOpen(t)} style={{ cursor: 'pointer' }}>
+              <td className="my-work-colour-cell" title={cat?.name ?? '(No category)'}>
+                <span
+                  className="my-work-colour-stripe"
+                  style={{ background: overdue ? '#ef4444' : colour }}
+                />
+              </td>
+              <td><span className={`type-badge ${badge.cls}`}>{badge.label}</span></td>
+              <td className="task-title-cell">
+                <span className="task-title-text">
+                  {parent && <span className="task-parent-context muted compact">{parent}: </span>}
+                  {t.title}
+                </span>
+              </td>
+              <td><StatusPill status={t.status} /></td>
+              <td>
+                <span className="percent-cell">
+                  <span className="percent-bar">
+                    <span
+                      className={`percent-bar-fill ${t.percentComplete === 100 ? 'is-done' : ''}`}
+                      style={{ width: `${t.percentComplete}%` }}
+                    />
+                  </span>
+                  <span className="percent-cell-num">{t.percentComplete}</span>
+                </span>
+              </td>
+              <td><PriorityPill priority={t.priority} /></td>
+              <td className={overdue ? 'overdue' : ''}>{formatDate(t.dueDate)}</td>
+              <td>{t.primaryOwner ?? <span className="muted">—</span>}</td>
+              <td><AssigneePile names={t.assignees} /></td>
+              <td><TagCellPile tags={t.tags} /></td>
+            </tr>
+          )
+        }
+        // workflow row
+        const w       = r.instance
+        const cat     = categoryById.get(w.categoryId ?? -1)
+        const colour  = cat?.colour ?? 'rgba(99, 102, 241, 0.85)'
+        const overdue = isOverdue(w.targetDate, (w.status as never))
+        const titleSuffix = [
+          w.gateType   ? `(${w.gateType})`  : null,
+          w.projectRef ? `· ${w.projectRef}` : null,
+        ].filter(Boolean).join(' ')
         return (
-          <tr key={t.id} className="task-row" onClick={() => onOpen(t)} style={{ cursor: 'pointer' }}>
+          <tr
+            key={`w-${w.id}`}
+            className="task-row task-row-workflow"
+            onClick={() => onOpenWorkflow?.(w.id)}
+            style={{ cursor: onOpenWorkflow ? 'pointer' : 'default' }}
+          >
             <td className="my-work-colour-cell" title={cat?.name ?? '(No category)'}>
               <span
                 className="my-work-colour-stripe"
                 style={{ background: overdue ? '#ef4444' : colour }}
               />
             </td>
-            <td><span className={`type-badge ${badge.cls}`}>{badge.label}</span></td>
+            <td><span className="type-badge type-badge-workflow">Workflow</span></td>
             <td className="task-title-cell">
               <span className="task-title-text">
-                {parent && <span className="task-parent-context muted compact">{parent}: </span>}
-                {t.title}
+                <strong>{w.name}</strong>
+                {titleSuffix && <span className="muted compact"> {titleSuffix}</span>}
               </span>
             </td>
-            <td><StatusPill status={t.status} /></td>
+            <td><StatusPill status={w.status as never} /></td>
             <td>
-              <span className="percent-cell">
+              <span className="percent-cell" title={`${w.doneSteps}/${w.totalSteps} steps complete`}>
                 <span className="percent-bar">
                   <span
-                    className={`percent-bar-fill ${t.percentComplete === 100 ? 'is-done' : ''}`}
-                    style={{ width: `${t.percentComplete}%` }}
+                    className={`percent-bar-fill ${w.percentDone === 100 ? 'is-done' : ''}`}
+                    style={{ width: `${w.percentDone}%` }}
                   />
                 </span>
-                <span className="percent-cell-num">{t.percentComplete}</span>
+                <span className="percent-cell-num">{w.percentDone}</span>
               </span>
             </td>
-            <td><PriorityPill priority={t.priority} /></td>
-            <td className={overdue ? 'overdue' : ''}>{formatDate(t.dueDate)}</td>
-            <td>{t.primaryOwner ?? <span className="muted">—</span>}</td>
-            <td><AssigneePile names={t.assignees} /></td>
-            <td><TagCellPile tags={t.tags} /></td>
+            <td><PriorityPill priority={w.priority} /></td>
+            <td className={overdue ? 'overdue' : ''}>{formatDate(w.targetDate)}</td>
+            <td>{w.primaryOwner ?? <span className="muted">—</span>}</td>
+            <td><AssigneePile names={w.assignees} /></td>
+            <td><TagCellPile tags={w.tags} /></td>
           </tr>
         )
       })}

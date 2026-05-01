@@ -1107,18 +1107,25 @@ function registerIpcHandlers() {
     try {
       let newId
       const tx = db.transaction(() => {
+        // Subtasks are always plain tasks regardless of what the form sent.
+        // Features are intentionally top-level containers.
+        const isSubtask = input.parentTaskId != null
+        const allowed = new Set(['one-off', 'feature'])
+        const requested = input.type ?? 'one-off'
+        const taskType = isSubtask ? 'one-off' : (allowed.has(requested) ? requested : 'one-off')
         const ins = db.prepare(`
           INSERT INTO tasks (
             type, category_id, parent_task_id, title, description, status, priority,
             primary_owner, due_date, percent_complete, percent_manual, notes,
             blocked_by_task_id, blocked_reason
           ) VALUES (
-            'one-off', @categoryId, @parentTaskId, @title, @description, @status, @priority,
+            @type, @categoryId, @parentTaskId, @title, @description, @status, @priority,
             @primaryOwner, @dueDate, @percentComplete, @percentManual, @notes,
             @blockedByTaskId, @blockedReason
           )
         `)
         const result = ins.run({
+          type:            taskType,
           categoryId:      input.categoryId ?? null,
           parentTaskId:    input.parentTaskId ?? null,
           title:           input.title,
@@ -1191,8 +1198,22 @@ function registerIpcHandlers() {
 
         const setParts = []
         const params = { id }
+        // Only allow changing type within the generic Task/Feature pair.
+        // Workflow steps and recurring rows shouldn't be promoted to a
+        // different shape via this generic update path.
+        if (Object.prototype.hasOwnProperty.call(patch, 'type')) {
+          const allowed = new Set(['one-off', 'feature'])
+          if (!allowed.has(patch.type)) {
+            throw new Error(`Cannot change type to "${patch.type}" via update-task`)
+          }
+          if (oldRow.type !== 'one-off' && oldRow.type !== 'feature') {
+            throw new Error(`Cannot change the type of a ${oldRow.type} row`)
+          }
+        }
+
         const map = {
           title:           'title',
+          type:            'type',
           categoryId:      'category_id',
           primaryOwner:    'primary_owner',
           status:          'status',

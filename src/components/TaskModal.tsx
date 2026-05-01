@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import type {
-  Assignee, Category, Priority, Status, Task, TaskInput, WorkflowInstance,
+  Assignee, Category, Priority, Status, Task, TaskInput, TaskType, WorkflowInstance,
 } from '../types'
-import { ALL_PRIORITIES, ALL_STATUSES } from '../types'
+import { ALL_PRIORITIES, ALL_STATUSES, CREATABLE_TASK_TYPES } from '../types'
 import { todayIso } from '../lib/date'
 import { computeAutoPercent, openSubtaskCount } from '../lib/percent'
 import { TagInput } from './TagInput'
@@ -43,12 +43,14 @@ export function TaskModal({
   const isAddSubtask = mode === 'add' && !!parent
 
   // Inheritance defaults: tags + category copy from the parent on first
-  // render; owner + priority do not. Each tickbox is a copy-or-clear action;
-  // after a toggle the field is independently editable.
+  // render; owner / priority / team / due date do not. Each tickbox is a
+  // copy-or-clear action; after a toggle the field is independently editable.
   const [inheritTags,     setInheritTags]     = useState(isAddSubtask)
   const [inheritCategory, setInheritCategory] = useState(isAddSubtask)
   const [inheritOwner,    setInheritOwner]    = useState(false)
   const [inheritPriority, setInheritPriority] = useState(false)
+  const [inheritTeam,     setInheritTeam]     = useState(false)
+  const [inheritDueDate,  setInheritDueDate]  = useState(false)
 
   const [title, setTitle]                   = useState(task?.title ?? '')
   const [categoryId, setCategoryId]         = useState<number | null>(
@@ -66,8 +68,16 @@ export function TaskModal({
   )
   const [status, setStatus]                 = useState<Status>(task?.status ?? 'PLANNING')
   const [priority, setPriority]             = useState<Priority | null>(task?.priority ?? null)
+  const [taskType, setTaskType]             = useState<TaskType>(task?.type ?? 'one-off')
   const [blockedByTaskId, setBlockedByTaskId] = useState<number | null>(task?.blockedByTaskId ?? null)
   const [blockedReason, setBlockedReason]     = useState(task?.blockedReason ?? '')
+
+  // The Type dropdown only makes sense for plain Task / Feature rows.
+  // Subtasks are always tasks; workflow steps and recurring rows have
+  // their own discriminators stored elsewhere.
+  const showTypeDropdown =
+    !isAddSubtask
+    && (mode === 'add' || (task?.type === 'one-off' || task?.type === 'feature'))
 
   const onToggleInheritTags = (next: boolean) => {
     setInheritTags(next)
@@ -88,6 +98,16 @@ export function TaskModal({
     setInheritPriority(next)
     if (next && parent) setPriority(parent.priority ?? null)
     else if (!next)     setPriority(null)
+  }
+  const onToggleInheritTeam = (next: boolean) => {
+    setInheritTeam(next)
+    if (next && parent) setTeam([...parent.assignees])
+    else if (!next)     setTeam([])
+  }
+  const onToggleInheritDueDate = (next: boolean) => {
+    setInheritDueDate(next)
+    if (next && parent) setDueDate(parent.dueDate ?? '')
+    else if (!next)     setDueDate('')
   }
   const [dueDate, setDueDate]               = useState(task?.dueDate ?? '')
   const [percentComplete, setPercentComplete] = useState(task?.percentComplete ?? 0)
@@ -141,6 +161,7 @@ export function TaskModal({
       const isBlocked = status === 'BLOCKED'
       await onSave({
         title:           title.trim(),
+        type:            showTypeDropdown ? taskType : undefined,
         categoryId,
         primaryOwner:    primaryOwner ?? null,
         assignees:       team,
@@ -253,6 +274,30 @@ export function TaskModal({
                 <input type="checkbox" checked={inheritPriority} onChange={e => onToggleInheritPriority(e.target.checked)} />
                 <span>Priority</span>
               </label>
+              <label className="inherit-tickbox">
+                <input
+                  type="checkbox"
+                  checked={inheritTeam}
+                  disabled={!parent || parent.assignees.length === 0}
+                  onChange={e => onToggleInheritTeam(e.target.checked)}
+                />
+                <span>
+                  Team
+                  {parent && parent.assignees.length > 0 && <em className="muted compact"> ({parent.assignees.length})</em>}
+                </span>
+              </label>
+              <label className="inherit-tickbox">
+                <input
+                  type="checkbox"
+                  checked={inheritDueDate}
+                  disabled={!parent?.dueDate}
+                  onChange={e => onToggleInheritDueDate(e.target.checked)}
+                />
+                <span>
+                  Due date
+                  {parent?.dueDate && <em className="muted compact"> ({parent.dueDate})</em>}
+                </span>
+              </label>
             </div>
           </div>
         )}
@@ -273,6 +318,16 @@ export function TaskModal({
           </label>
 
           <div className="form-row">
+            {showTypeDropdown && (
+              <label className="form-field">
+                <span>Type</span>
+                <select value={taskType} onChange={e => setTaskType(e.target.value as TaskType)}>
+                  {CREATABLE_TASK_TYPES.map(o => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className="form-field">
               <span>Category</span>
               <select value={categoryId ?? ''} onChange={e => setCategoryId(e.target.value ? Number(e.target.value) : null)}>

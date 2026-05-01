@@ -3679,9 +3679,14 @@ kbd {
 .dash-filter-dropdown-footer {
   padding: 4px 10px 6px;
   display: flex;
-  justify-content: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
   border-top: 1px solid var(--border);
   margin-top: 4px;
+}
+.dash-filter-dropdown-footer .dash-filter-clear-all {
+  flex: 1;
+  text-align: center;
 }
 
 /* Legacy panel (no longer rendered) */
@@ -6198,6 +6203,14 @@ kbd {
 }
 [data-theme="light"] .type-badge-recurring {
   color: #0d9488;
+}
+.type-badge-feature {
+  background: rgba(168, 85, 247, 0.16);
+  color: #d8b4fe;
+  border: 1px solid rgba(168, 85, 247, 0.32);
+}
+[data-theme="light"] .type-badge-feature {
+  color: #7e22ce;
 }
 .workflow-step-number {
   display: inline-block;

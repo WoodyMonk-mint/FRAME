@@ -13,7 +13,14 @@ export type ViewDef = {
 
 // ─── Domain ─────────────────────────────────────────────────────────────────
 
-export type TaskType = 'one-off' | 'repeating' | 'workflow'
+export type TaskType = 'one-off' | 'feature' | 'repeating' | 'workflow'
+
+// Types selectable from the generic "Add task" dialog. Recurring lives in
+// the Recurring view; workflow steps live in their workflow instance.
+export const CREATABLE_TASK_TYPES: Array<{ value: TaskType; label: string }> = [
+  { value: 'one-off', label: 'Task' },
+  { value: 'feature', label: 'Feature' },
+]
 export type Status   = 'PLANNING' | 'WIP' | 'BLOCKED' | 'ON_HOLD' | 'DONE' | 'CANCELLED'
 export type Priority = 'P0' | 'P1' | 'P2' | 'P3'
 
@@ -68,6 +75,7 @@ export type Task = {
 
 export type TaskInput = {
   title:            string
+  type?:            TaskType        // 'one-off' (default) | 'feature' for the generic dialog
   categoryId:       number | null
   parentTaskId?:    number | null
   primaryOwner:     string | null

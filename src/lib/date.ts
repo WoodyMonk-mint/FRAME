@@ -51,6 +51,20 @@ export function formatRelativeTime(input: string | null): string {
   return new Date(t).toISOString().slice(0, 10)
 }
 
+// "This work week" upper bound — Friday of the current Mon–Fri block.
+// On a Sat/Sun it rolls forward to the upcoming Friday. Used by the
+// Dashboard cards, the My Work bucket, and the Task List filter.
+export function endOfWorkWeekIso(): string {
+  const d = new Date()
+  const day = d.getDay()           // 0 = Sun, 1 = Mon, …, 5 = Fri, 6 = Sat
+  let addDays: number
+  if (day >= 1 && day <= 5)        addDays = 5 - day
+  else if (day === 0)              addDays = 5     // Sun → next Fri
+  else                             addDays = 6     // Sat → next Fri
+  d.setDate(d.getDate() + addDays)
+  return d.toISOString().slice(0, 10)
+}
+
 // Step a YYYY-MM-DD date forward by a recurrence rule. Returns null if the
 // inputs are missing or invalid. Mirrors the backend's addRecurrence helper.
 export function addRecurrence(iso: string | null, unit: RecurrenceUnit | null, interval: number | null): string | null {
@@ -76,10 +90,9 @@ export function isInDueRange(dueDate: string | null, status: Status, range: DueR
   const today = todayIso()
   if (range === 'today') return dueDate === today
   if (range === 'this-week') {
-    const end = new Date(today)
-    end.setDate(end.getDate() + 7)
-    const endIso = end.toISOString().slice(0, 10)
-    return dueDate >= today && dueDate <= endIso
+    // "This week" = today through this Friday inclusive (working-week
+    // semantics). Anything later is "next week" / "later".
+    return dueDate >= today && dueDate <= endOfWorkWeekIso()
   }
   return true
 }
