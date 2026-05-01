@@ -111,9 +111,43 @@ export type WorkflowTemplate = {
   gateType:     string | null
   description:  string | null
   categoryId:   number | null
+  categoryName?: string | null   // present from get-workflow-template; absent from list
   isArchived:   boolean
   stepCount:    number
+  createdAt?:   string
 }
+
+export type WorkflowTemplateStep = {
+  id:           number
+  templateId:   number
+  stepNumber:   number
+  title:        string
+  description:  string | null
+  defaultOwner: string | null
+  offsetDays:   number | null
+  isOptional:   boolean
+}
+
+export type NewWorkflowTemplateInput = {
+  name:         string
+  gateType?:    string | null
+  description?: string | null
+  categoryId?:  number | null
+}
+
+export type WorkflowTemplatePatch = Partial<NewWorkflowTemplateInput> & {
+  isArchived?: boolean
+}
+
+export type NewWorkflowTemplateStepInput = {
+  title:         string
+  description?:  string | null
+  defaultOwner?: string | null
+  offsetDays?:   number | null
+  isOptional?:   boolean
+}
+
+export type WorkflowTemplateStepPatch = Partial<NewWorkflowTemplateStepInput>
 
 export type WorkflowInstance = {
   id:            number
@@ -140,18 +174,22 @@ export type WorkflowInstance = {
 }
 
 export type NewWorkflowInput = {
-  templateId:        number
-  name:              string
-  gateType?:         string | null
-  projectRef?:       string | null
-  startDate?:        string | null
-  targetDate?:       string | null
-  status?:           Status
-  priority?:         Priority | null
-  primaryOwner?:     string | null
-  assignees?:        string[]
-  tags?:             string[]
-  applyTagsToSteps?: boolean
+  templateId:           number
+  name:                 string
+  gateType?:            string | null
+  projectRef?:          string | null
+  startDate?:           string | null
+  targetDate?:          string | null
+  status?:              Status
+  priority?:            Priority | null
+  primaryOwner?:        string | null
+  assignees?:           string[]
+  tags?:                string[]
+  applyTagsToSteps?:    boolean
+  applyOffsets?:        boolean
+  applyPriorityToSteps?: boolean
+  applyOwnerToSteps?:    boolean
+  applyTeamToSteps?:     boolean
 }
 
 export type WorkflowPatch = {

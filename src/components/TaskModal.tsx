@@ -235,7 +235,7 @@ export function TaskModal({
 
         {isAddSubtask && (
           <div className="inherit-panel">
-            <p className="panel-label" style={{ marginBottom: '0.4rem' }}>Inherit from parent</p>
+            <p className="panel-label">Inherit from parent</p>
             <div className="inherit-row">
               <label className="inherit-tickbox">
                 <input type="checkbox" checked={inheritTags}     onChange={e => onToggleInheritTags(e.target.checked)} />

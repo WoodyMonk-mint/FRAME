@@ -24,17 +24,21 @@ type CreateProps = {
   tagSuggestions: string[]
   onCancel:       () => void
   onSubmit:       (input: {
-    templateId:       number
-    name:             string
-    gateType:         string | null
-    projectRef:       string | null
-    startDate:        string | null
-    targetDate:       string | null
-    priority:         Priority | null
-    primaryOwner:     string | null
-    assignees:        string[]
-    tags:             string[]
-    applyTagsToSteps: boolean
+    templateId:           number
+    name:                 string
+    gateType:             string | null
+    projectRef:           string | null
+    startDate:            string | null
+    targetDate:           string | null
+    priority:             Priority | null
+    primaryOwner:         string | null
+    assignees:            string[]
+    tags:                 string[]
+    applyTagsToSteps:     boolean
+    applyOffsets:         boolean
+    applyPriorityToSteps: boolean
+    applyOwnerToSteps:    boolean
+    applyTeamToSteps:     boolean
   }) => Promise<void>
 }
 
@@ -84,7 +88,11 @@ export function WorkflowDialog(props: Props) {
     return existing
   })
   const [tags, setTags]             = useState<string[]>(initialInstance?.tags ?? [])
-  const [applyTagsToSteps, setApplyTagsToSteps] = useState(true)
+  const [applyTagsToSteps, setApplyTagsToSteps]         = useState(true)
+  const [applyOffsets, setApplyOffsets]                 = useState(true)
+  const [applyPriorityToSteps, setApplyPriorityToSteps] = useState(false)
+  const [applyOwnerToSteps, setApplyOwnerToSteps]       = useState(false)
+  const [applyTeamToSteps, setApplyTeamToSteps]         = useState(false)
 
   const [error, setError]           = useState<string | null>(null)
   const [saving, setSaving]         = useState(false)
@@ -133,17 +141,21 @@ export function WorkflowDialog(props: Props) {
         })
       } else {
         await (props as CreateProps).onSubmit({
-          templateId:       templateId as number,
-          name:             name.trim(),
-          gateType:         isGateReview ? gateType : null,
-          projectRef:       projectRef.trim() || null,
-          startDate:        startDate || null,
-          targetDate:       targetDate || null,
+          templateId:           templateId as number,
+          name:                 name.trim(),
+          gateType:             isGateReview ? gateType : null,
+          projectRef:           projectRef.trim() || null,
+          startDate:            startDate || null,
+          targetDate:           targetDate || null,
           priority,
           primaryOwner,
-          assignees:        team,
+          assignees:            team,
           tags,
           applyTagsToSteps,
+          applyOffsets,
+          applyPriorityToSteps,
+          applyOwnerToSteps,
+          applyTeamToSteps,
         })
       }
     } catch (err) {
@@ -230,7 +242,7 @@ export function WorkflowDialog(props: Props) {
               </select>
             </label>
             <label className="form-field">
-              <span>Project reference <em className="muted compact">(optional)</em></span>
+              <span>Project reference</span>
               <input
                 type="text"
                 value={projectRef}
@@ -272,15 +284,62 @@ export function WorkflowDialog(props: Props) {
             <TagInput value={tags} onChange={setTags} suggestions={props.tagSuggestions} />
           </div>
 
-          {!isEdit && tags.length > 0 && (
-            <label className="inherit-tickbox">
-              <input
-                type="checkbox"
-                checked={applyTagsToSteps}
-                onChange={e => setApplyTagsToSteps(e.target.checked)}
-              />
-              <span>Apply these tags to every step task</span>
-            </label>
+          {!isEdit && (
+            <div className="inherit-panel">
+              <p className="panel-label">Apply to step tasks</p>
+              <div className="inherit-row">
+                <label className="inherit-tickbox">
+                  <input
+                    type="checkbox"
+                    checked={applyOffsets}
+                    onChange={e => setApplyOffsets(e.target.checked)}
+                  />
+                  <span>Default offset days from template</span>
+                </label>
+                <label className="inherit-tickbox">
+                  <input
+                    type="checkbox"
+                    checked={applyTagsToSteps}
+                    disabled={tags.length === 0}
+                    onChange={e => setApplyTagsToSteps(e.target.checked)}
+                  />
+                  <span>
+                    Tags
+                    {tags.length > 0 && <em className="muted compact"> ({tags.length})</em>}
+                  </span>
+                </label>
+                <label className="inherit-tickbox">
+                  <input
+                    type="checkbox"
+                    checked={applyPriorityToSteps}
+                    disabled={!priority}
+                    onChange={e => setApplyPriorityToSteps(e.target.checked)}
+                  />
+                  <span>Priority</span>
+                </label>
+                <label className="inherit-tickbox">
+                  <input
+                    type="checkbox"
+                    checked={applyOwnerToSteps}
+                    disabled={!primaryOwner}
+                    onChange={e => setApplyOwnerToSteps(e.target.checked)}
+                  />
+                  <span>Primary owner <em className="muted compact">(overrides template defaults)</em></span>
+                </label>
+                <label className="inherit-tickbox">
+                  <input
+                    type="checkbox"
+                    checked={applyTeamToSteps}
+                    disabled={team.length === 0}
+                    onChange={e => setApplyTeamToSteps(e.target.checked)}
+                  />
+                  <span>
+                    Team
+                    {team.length > 0 && <em className="muted compact"> ({team.length})</em>}
+                  </span>
+                </label>
+              </div>
+            </div>
           )}
           {isEdit && (
             <p className="muted compact" style={{ fontSize: '0.75rem' }}>

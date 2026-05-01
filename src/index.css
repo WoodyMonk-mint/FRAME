@@ -6639,44 +6639,83 @@ button.dashboard-card.dashboard-card-clickable:active {
 }
 
 .settings-card {
+  /* PRISM-style outer panel for grouped preferences. */
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 24px;
   background: var(--surface);
-  padding: 0.85rem 1rem;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
 }
 .settings-card-heading {
-  font-size: 0.85rem;
+  /* Mirrors PRISM's panel-label — small caps, muted, above the rows. */
+  font-size: 11px;
   font-weight: 600;
-  margin: 0 0 0.6rem;
-  color: var(--text);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0;
+}
+
+.settings-prefs {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-top: 6px;
 }
 .settings-pref-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
-  padding: 0.4rem 0;
-  border-top: 1px solid var(--border);
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  gap: 16px;
 }
-.settings-pref-row:first-of-type { border-top: 0; }
+.settings-pref-row:last-child { border-bottom: none; }
 .settings-pref-label {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
-  flex: 1;
+  gap: 2px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.settings-pref-label > span:first-child {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+.settings-pref-hint {
+  font-size: 11px;
+  color: var(--muted);
 }
 .settings-pref-options {
   display: flex;
+  gap: 24px;
+  flex-shrink: 0;
   align-items: center;
-  gap: 0.75rem;
-  flex: 0 0 auto;
 }
 .settings-pref-option {
-  display: inline-flex;
+  /* Vertical stack: radio on top, small caption below. Matches PRISM. */
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 0.3rem;
-  font-size: 0.85rem;
+  gap: 5px;
+  font-size: 0.7rem;
+  color: var(--muted);
   cursor: pointer;
+  width: 56px;
+  text-align: center;
+}
+.settings-pref-option input[type="radio"] {
+  margin: 0;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 .settings-path {
   font-family: ui-monospace, SFMono-Regular, monospace;
@@ -6754,24 +6793,53 @@ button.dashboard-card.dashboard-card-clickable:active {
   background: rgba(99, 102, 241, 0.06);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 0.5rem 0.75rem;
+  padding: 0.75rem 1rem;
   margin-bottom: 0.75rem;
+  box-sizing: border-box;
+}
+.inherit-panel .panel-label {
+  display: block;
+  margin: 0 0 0.5rem;
+  text-align: left;
 }
 .inherit-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem 1rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
 }
 .inherit-tickbox {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: 1.1rem 1fr;
   align-items: center;
-  gap: 0.4rem;
+  column-gap: 0.55rem;
+  text-align: left;
   font-size: 0.85rem;
+  line-height: 1.4;
   cursor: pointer;
   user-select: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 .inherit-tickbox input[type="checkbox"] {
+  margin: 0;
   cursor: pointer;
+  justify-self: start;
+}
+.inherit-tickbox > span {
+  text-align: left;
+  min-width: 0;
+}
+.inherit-tickbox input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+.inherit-tickbox input[type="checkbox"]:disabled + span {
+  color: var(--muted);
+  cursor: not-allowed;
 }
 
 .icon-toggle {

@@ -33,6 +33,8 @@ try {
       listTags:        ()              => ipcRenderer.invoke('db:list-tags'),
       listTagUsage:    ()              => ipcRenderer.invoke('db:list-tag-usage'),
       renameTag:       (oldTag, newTag) => ipcRenderer.invoke('db:rename-tag', oldTag, newTag),
+      createTag:       (name)          => ipcRenderer.invoke('db:create-tag', name),
+      deleteTag:       (name)          => ipcRenderer.invoke('db:delete-tag', name),
       listTaskHistory: (taskId)        => ipcRenderer.invoke('db:list-task-history', taskId),
       takeSnapshot:    (snapshotDate)  => ipcRenderer.invoke('db:take-snapshot', snapshotDate),
       listOverdueTrend: (monthsBack)   => ipcRenderer.invoke('db:list-overdue-trend', monthsBack),
@@ -53,6 +55,17 @@ try {
 
       // Workflows — Iteration 3
       listWorkflowTemplates:  ()       => ipcRenderer.invoke('db:list-workflow-templates'),
+      getWorkflowTemplate:    (id)     => ipcRenderer.invoke('db:get-workflow-template', id),
+      createWorkflowTemplate: (input)  => ipcRenderer.invoke('db:create-workflow-template', input),
+      updateWorkflowTemplate: (id, p)  => ipcRenderer.invoke('db:update-workflow-template', id, p),
+      createWorkflowTemplateStep: (templateId, input) =>
+        ipcRenderer.invoke('db:create-workflow-template-step', templateId, input),
+      updateWorkflowTemplateStep: (stepId, patch) =>
+        ipcRenderer.invoke('db:update-workflow-template-step', stepId, patch),
+      deleteWorkflowTemplateStep: (stepId) =>
+        ipcRenderer.invoke('db:delete-workflow-template-step', stepId),
+      reorderWorkflowTemplateSteps: (templateId, orderedStepIds) =>
+        ipcRenderer.invoke('db:reorder-workflow-template-steps', templateId, orderedStepIds),
       listWorkflowInstances:  ()       => ipcRenderer.invoke('db:list-workflow-instances'),
       createWorkflowInstance: (input)  => ipcRenderer.invoke('db:create-workflow-instance', input),
       getWorkflowInstance:    (id)     => ipcRenderer.invoke('db:get-workflow-instance', id),

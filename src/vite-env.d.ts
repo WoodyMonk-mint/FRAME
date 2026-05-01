@@ -39,9 +39,13 @@ declare global {
     updateAssignee:  (id: number, patch: { name?: string; isActive?: boolean; sortOrder?: number }) =>
       Promise<{ ok: boolean; error?: string }>
     listTags:        () => Promise<string[]>
-    listTagUsage:    () => Promise<{ tag: string; taskCount: number; workflowCount: number }[]>
+    listTagUsage:    () => Promise<{ tag: string; taskCount: number; workflowCount: number; inLibrary: boolean }[]>
     renameTag:       (oldTag: string, newTag: string) =>
       Promise<{ ok: boolean; error?: string }>
+    createTag:       (name: string) =>
+      Promise<{ ok: boolean; id?: number; error?: string }>
+    deleteTag:       (name: string) =>
+      Promise<{ ok: boolean; removed?: number; error?: string }>
     listTaskHistory: (taskId: number) => Promise<import('./types').TaskHistoryEntry[]>
     takeSnapshot:    (snapshotDate?: string) =>
       Promise<{ ok: boolean; snapshotDate?: string; taskCount?: number; error?: string }>
@@ -52,6 +56,22 @@ declare global {
 
     // Workflows — Iteration 3
     listWorkflowTemplates:  () => Promise<import('./types').WorkflowTemplate[]>
+    getWorkflowTemplate:    (id: number) => Promise<
+      | { ok: true; template: import('./types').WorkflowTemplate; steps: import('./types').WorkflowTemplateStep[] }
+      | { ok: false; error: string }
+    >
+    createWorkflowTemplate: (input: import('./types').NewWorkflowTemplateInput) =>
+      Promise<{ ok: boolean; id?: number; error?: string }>
+    updateWorkflowTemplate: (id: number, patch: import('./types').WorkflowTemplatePatch) =>
+      Promise<{ ok: boolean; error?: string }>
+    createWorkflowTemplateStep: (templateId: number, input: import('./types').NewWorkflowTemplateStepInput) =>
+      Promise<{ ok: boolean; id?: number; error?: string }>
+    updateWorkflowTemplateStep: (stepId: number, patch: import('./types').WorkflowTemplateStepPatch) =>
+      Promise<{ ok: boolean; error?: string }>
+    deleteWorkflowTemplateStep: (stepId: number) =>
+      Promise<{ ok: boolean; removed?: number; error?: string }>
+    reorderWorkflowTemplateSteps: (templateId: number, orderedStepIds: number[]) =>
+      Promise<{ ok: boolean; error?: string }>
     listWorkflowInstances:  () => Promise<import('./types').WorkflowInstance[]>
     createWorkflowInstance: (input: import('./types').NewWorkflowInput) =>
       Promise<{ ok: boolean; instanceId?: number; error?: string }>

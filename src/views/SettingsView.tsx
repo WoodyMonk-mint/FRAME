@@ -4,14 +4,16 @@ import { CategoriesPanel } from '../components/CategoriesPanel'
 import { DatabasePanel } from '../components/DatabasePanel'
 import { GeneralPanel } from '../components/GeneralPanel'
 import { TagsPanel } from '../components/TagsPanel'
+import { WorkflowTemplatesPanel } from '../components/WorkflowTemplatesPanel'
 
-type SettingsTab = 'general' | 'categories' | 'assignees' | 'tags' | 'database'
+type SettingsTab = 'general' | 'categories' | 'assignees' | 'tags' | 'workflows' | 'database'
 
 const TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: 'general',    label: 'General' },
   { id: 'categories', label: 'Categories' },
   { id: 'assignees',  label: 'Assignees' },
   { id: 'tags',       label: 'Tags' },
+  { id: 'workflows',  label: 'Workflow templates' },
   { id: 'database',   label: 'Database' },
 ]
 
@@ -42,6 +44,7 @@ export function SettingsView() {
         {tab === 'categories' && <CategoriesPanel />}
         {tab === 'assignees'  && <AssigneesPanel />}
         {tab === 'tags'       && <TagsPanel />}
+        {tab === 'workflows'  && <WorkflowTemplatesPanel />}
         {tab === 'database'   && <DatabasePanel />}
       </div>
     </div>

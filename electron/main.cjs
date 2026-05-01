@@ -243,6 +243,12 @@ function runSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_workflow_instance_tags_instance ON workflow_instance_tags(instance_id);
 
+    CREATE TABLE IF NOT EXISTS tags (
+      id         INTEGER PRIMARY KEY,
+      name       TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS workflow_instance_assignees (
       id          INTEGER PRIMARY KEY,
       instance_id INTEGER NOT NULL REFERENCES workflow_instances(id) ON DELETE CASCADE,
@@ -964,6 +970,34 @@ function registerIpcHandlers() {
     }))
   })
 
+  ipcMain.handle('db:create-tag', (_event, name) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const clean = String(name ?? '').trim()
+      if (!clean) throw new Error('Tag name is required')
+      const dup = db.prepare('SELECT id FROM tags WHERE name = ?').get(clean)
+      if (dup) throw new Error(`Tag "${clean}" already exists`)
+      const r = db.prepare('INSERT INTO tags (name) VALUES (?)').run(clean)
+      return { ok: true, id: Number(r.lastInsertRowid) }
+    } catch (err) {
+      console.error('[DB] create-tag failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:delete-tag', (_event, name) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const clean = String(name ?? '').trim()
+      if (!clean) throw new Error('Tag name is required')
+      const r = db.prepare('DELETE FROM tags WHERE name = ?').run(clean)
+      return { ok: true, removed: r.changes }
+    } catch (err) {
+      console.error('[DB] delete-tag failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
   ipcMain.handle('db:rename-tag', (_event, oldTag, newTag) => {
     if (!db) return { ok: false, error: 'Database not ready' }
     try {
@@ -989,6 +1023,16 @@ function registerIpcHandlers() {
             AND instance_id IN (SELECT instance_id FROM workflow_instance_tags WHERE tag = ?)
         `).run(from, to)
         db.prepare('UPDATE workflow_instance_tags SET tag = ? WHERE tag = ?').run(to, from)
+
+        // Library: rename if it exists; if the destination already exists,
+        // delete the source row to merge.
+        const fromRow = db.prepare('SELECT id FROM tags WHERE name = ?').get(from)
+        const toRow   = db.prepare('SELECT id FROM tags WHERE name = ?').get(to)
+        if (fromRow && toRow) {
+          db.prepare('DELETE FROM tags WHERE name = ?').run(from)
+        } else if (fromRow) {
+          db.prepare('UPDATE tags SET name = ? WHERE name = ?').run(to, from)
+        }
       })
       tx()
       return { ok: true }
@@ -1000,35 +1044,52 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:list-tags', () => {
     if (!db) return []
+    // Suggestions: union of tags currently in use AND library-registered
+    // tags. Used by TagInput autocomplete.
     return db.prepare(`
-      SELECT tag, COUNT(*) AS n
-      FROM task_tags tt
-      JOIN tasks t ON tt.task_id = t.id
-      WHERE t.is_deleted = 0
+      SELECT tag, SUM(n) AS total FROM (
+        SELECT tt.tag AS tag, COUNT(*) AS n
+        FROM task_tags tt
+        JOIN tasks t ON tt.task_id = t.id
+        WHERE t.is_deleted = 0
+        GROUP BY tt.tag
+        UNION ALL
+        SELECT wt.tag AS tag, COUNT(*) AS n
+        FROM workflow_instance_tags wt
+        JOIN workflow_instances wi ON wt.instance_id = wi.id
+        WHERE wi.is_deleted = 0
+        GROUP BY wt.tag
+        UNION ALL
+        SELECT name AS tag, 0 AS n FROM tags
+      )
       GROUP BY tag
-      ORDER BY n DESC, tag
+      ORDER BY total DESC, tag
     `).all().map(r => r.tag)
   })
 
   ipcMain.handle('db:list-tag-usage', () => {
     if (!db) return []
-    // Distinct tags across both task_tags and workflow_instance_tags, with
-    // counts on each side so the user can see where the tag lives.
+    // Distinct tags across task_tags + workflow_instance_tags + the
+    // library, with counts on each side so the user can see where
+    // each tag lives. Library-only entries appear with both counts at 0.
     const rows = db.prepare(`
       SELECT
         tag,
         SUM(in_tasks)     AS task_count,
-        SUM(in_workflows) AS workflow_count
+        SUM(in_workflows) AS workflow_count,
+        MAX(in_library)   AS in_library
       FROM (
-        SELECT tt.tag, 1 AS in_tasks, 0 AS in_workflows
+        SELECT tt.tag, 1 AS in_tasks, 0 AS in_workflows, 0 AS in_library
         FROM task_tags tt
         JOIN tasks t ON tt.task_id = t.id
         WHERE t.is_deleted = 0
         UNION ALL
-        SELECT wt.tag, 0 AS in_tasks, 1 AS in_workflows
+        SELECT wt.tag, 0 AS in_tasks, 1 AS in_workflows, 0 AS in_library
         FROM workflow_instance_tags wt
         JOIN workflow_instances wi ON wt.instance_id = wi.id
         WHERE wi.is_deleted = 0
+        UNION ALL
+        SELECT name, 0 AS in_tasks, 0 AS in_workflows, 1 AS in_library FROM tags
       )
       GROUP BY tag
       ORDER BY tag
@@ -1037,6 +1098,7 @@ function registerIpcHandlers() {
       tag:           r.tag,
       taskCount:     r.task_count,
       workflowCount: r.workflow_count,
+      inLibrary:     !!r.in_library,
     }))
   })
 
@@ -1729,6 +1791,202 @@ function registerIpcHandlers() {
     }))
   })
 
+  ipcMain.handle('db:get-workflow-template', (_event, id) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const tplRow = db.prepare(`
+        SELECT t.*, c.name AS category_name,
+          (SELECT COUNT(*) FROM workflow_template_steps s WHERE s.template_id = t.id) AS step_count
+        FROM workflow_templates t
+        LEFT JOIN categories c ON c.id = t.category_id
+        WHERE t.id = ?
+      `).get(id)
+      if (!tplRow) throw new Error(`Workflow template ${id} not found`)
+      const steps = db.prepare(`
+        SELECT id, template_id, step_number, title, description, default_owner, offset_days, is_optional
+        FROM workflow_template_steps
+        WHERE template_id = ?
+        ORDER BY step_number
+      `).all(id).map(s => ({
+        id:           s.id,
+        templateId:   s.template_id,
+        stepNumber:   s.step_number,
+        title:        s.title,
+        description:  s.description,
+        defaultOwner: s.default_owner,
+        offsetDays:   s.offset_days,
+        isOptional:   !!s.is_optional,
+      }))
+      return {
+        ok: true,
+        template: {
+          id:          tplRow.id,
+          name:        tplRow.name,
+          gateType:    tplRow.gate_type,
+          description: tplRow.description,
+          categoryId:  tplRow.category_id,
+          categoryName: tplRow.category_name ?? null,
+          isArchived:  !!tplRow.is_archived,
+          stepCount:   tplRow.step_count,
+          createdAt:   tplRow.created_at,
+        },
+        steps,
+      }
+    } catch (err) {
+      console.error('[DB] get-workflow-template failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:create-workflow-template', (_event, input) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const name = String(input?.name ?? '').trim()
+      if (!name) throw new Error('Template name is required')
+      const dup = db.prepare('SELECT id FROM workflow_templates WHERE name = ?').get(name)
+      if (dup) throw new Error(`A template named "${name}" already exists`)
+      const r = db.prepare(`
+        INSERT INTO workflow_templates (name, gate_type, description, category_id, is_archived)
+        VALUES (?, ?, ?, ?, 0)
+      `).run(
+        name,
+        input?.gateType    ?? null,
+        input?.description ?? null,
+        input?.categoryId  ?? null,
+      )
+      return { ok: true, id: Number(r.lastInsertRowid) }
+    } catch (err) {
+      console.error('[DB] create-workflow-template failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:update-workflow-template', (_event, id, patch) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const map = {
+        name:        'name',
+        gateType:    'gate_type',
+        description: 'description',
+        categoryId:  'category_id',
+        isArchived:  'is_archived',
+      }
+      const setParts = []
+      const params = { id }
+      for (const [tsKey, sqlKey] of Object.entries(map)) {
+        if (Object.prototype.hasOwnProperty.call(patch, tsKey)) {
+          setParts.push(`${sqlKey} = @${tsKey}`)
+          const v = patch[tsKey]
+          params[tsKey] = (tsKey === 'isArchived') ? (v ? 1 : 0) : v
+        }
+      }
+      if (setParts.length === 0) return { ok: true }
+      if (Object.prototype.hasOwnProperty.call(patch, 'name')) {
+        const dup = db.prepare('SELECT id FROM workflow_templates WHERE name = ? AND id != ?').get(patch.name, id)
+        if (dup) throw new Error(`A template named "${patch.name}" already exists`)
+      }
+      db.prepare(`UPDATE workflow_templates SET ${setParts.join(', ')} WHERE id = @id`).run(params)
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] update-workflow-template failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:create-workflow-template-step', (_event, templateId, input) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const tpl = db.prepare('SELECT id FROM workflow_templates WHERE id = ?').get(templateId)
+      if (!tpl) throw new Error(`Template ${templateId} not found`)
+      const title = String(input?.title ?? '').trim()
+      if (!title) throw new Error('Step title is required')
+      const max = db.prepare(
+        'SELECT COALESCE(MAX(step_number), 0) AS m FROM workflow_template_steps WHERE template_id = ?'
+      ).get(templateId).m
+      const r = db.prepare(`
+        INSERT INTO workflow_template_steps
+          (template_id, step_number, title, description, default_owner, offset_days, is_optional)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        templateId,
+        max + 1,
+        title,
+        input?.description  ?? null,
+        input?.defaultOwner ?? null,
+        input?.offsetDays   ?? null,
+        input?.isOptional ? 1 : 0,
+      )
+      return { ok: true, id: Number(r.lastInsertRowid) }
+    } catch (err) {
+      console.error('[DB] create-workflow-template-step failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:update-workflow-template-step', (_event, stepId, patch) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const map = {
+        title:        'title',
+        description:  'description',
+        defaultOwner: 'default_owner',
+        offsetDays:   'offset_days',
+        isOptional:   'is_optional',
+      }
+      const setParts = []
+      const params = { id: stepId }
+      for (const [tsKey, sqlKey] of Object.entries(map)) {
+        if (Object.prototype.hasOwnProperty.call(patch, tsKey)) {
+          setParts.push(`${sqlKey} = @${tsKey}`)
+          const v = patch[tsKey]
+          params[tsKey] = (tsKey === 'isOptional') ? (v ? 1 : 0) : v
+        }
+      }
+      if (setParts.length === 0) return { ok: true }
+      db.prepare(`UPDATE workflow_template_steps SET ${setParts.join(', ')} WHERE id = @id`).run(params)
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] update-workflow-template-step failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:delete-workflow-template-step', (_event, stepId) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const r = db.prepare('DELETE FROM workflow_template_steps WHERE id = ?').run(stepId)
+      return { ok: true, removed: r.changes }
+    } catch (err) {
+      console.error('[DB] delete-workflow-template-step failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:reorder-workflow-template-steps', (_event, templateId, orderedStepIds) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const tx = db.transaction(() => {
+        const existing = db.prepare(
+          'SELECT id FROM workflow_template_steps WHERE template_id = ?'
+        ).all(templateId).map(r => r.id)
+        const set = new Set(existing)
+        for (const id of orderedStepIds) {
+          if (!set.has(id)) throw new Error(`Step ${id} is not in template ${templateId}`)
+        }
+        if (existing.length !== orderedStepIds.length) {
+          throw new Error(`Expected ${existing.length} step IDs, got ${orderedStepIds.length}`)
+        }
+        const upd = db.prepare('UPDATE workflow_template_steps SET step_number = ? WHERE id = ?')
+        orderedStepIds.forEach((id, i) => upd.run(i + 1, id))
+      })
+      tx()
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] reorder-workflow-template-steps failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
   ipcMain.handle('db:list-workflow-instances', () => {
     if (!db) return []
     const rows = db.prepare(`
@@ -2258,7 +2516,16 @@ function registerIpcHandlers() {
           const insWfTag = db.prepare('INSERT INTO workflow_instance_tags (instance_id, tag) VALUES (?, ?)')
           for (const tag of cleanTags) insWfTag.run(newInstanceId, tag)
         }
-        const propagateTags = input.applyTagsToSteps !== false && cleanTags.length > 0
+        // Propagation flags from the create dialog. Defaults match the
+        // "most useful for the typical case" decision: offsets + tags on,
+        // priority + owner + team off (steps usually have role-specific
+        // owners on the template).
+        const propagateTags     = input.applyTagsToSteps        !== false && cleanTags.length > 0
+        const applyOffsets      = input.applyOffsets            !== false
+        const applyPriority     = input.applyPriorityToSteps    === true && input.priority != null
+        const applyOwner        = input.applyOwnerToSteps       === true && input.primaryOwner
+        const applyTeam         = input.applyTeamToSteps        === true
+          && Array.isArray(input.assignees) && input.assignees.length > 0
 
         const steps = db.prepare(`
           SELECT * FROM workflow_template_steps WHERE template_id = ? ORDER BY step_number
@@ -2270,7 +2537,7 @@ function registerIpcHandlers() {
             status, priority, primary_owner, due_date, percent_complete
           ) VALUES (
             'workflow', @categoryId, @instanceId, @title, @description,
-            'PLANNING', NULL, @primaryOwner, @dueDate, 0
+            'PLANNING', @priority, @primaryOwner, @dueDate, 0
           )
         `)
         const insAssignee = db.prepare('INSERT INTO task_assignees (task_id, name) VALUES (?, ?)')
@@ -2281,20 +2548,33 @@ function registerIpcHandlers() {
         `)
 
         for (const s of steps) {
-          const dueDate = addDays(input.startDate ?? null, s.offset_days ?? null)
+          const dueDate    = applyOffsets ? addDays(input.startDate ?? null, s.offset_days ?? null) : null
+          const stepOwner  = applyOwner   ? input.primaryOwner          : (s.default_owner ?? null)
+          const stepPriority = applyPriority ? input.priority            : null
           const taskRes = insTask.run({
             categoryId:   tpl.category_id ?? null,
             instanceId:   newInstanceId,
             title:        s.title,
             description:  s.description ?? null,
-            primaryOwner: s.default_owner ?? null,
+            priority:     stepPriority,
+            primaryOwner: stepOwner,
             dueDate,
           })
           const taskId = Number(taskRes.lastInsertRowid)
-          if (s.default_owner) {
-            // Mirror "primary owner auto-joins the team" convention.
-            insAssignee.run(taskId, s.default_owner)
+
+          // Build the step's team. Always start with the step's primary
+          // owner (mirrors the global "owner ⊂ team" convention). Then,
+          // if applyTeam is on, union with the workflow's team list.
+          const teamSet = new Set()
+          if (stepOwner) teamSet.add(stepOwner)
+          if (applyTeam) {
+            for (const n of input.assignees) {
+              const trimmed = String(n).trim()
+              if (trimmed) teamSet.add(trimmed)
+            }
           }
+          for (const n of teamSet) insAssignee.run(taskId, n)
+
           if (propagateTags) {
             for (const tag of cleanTags) insTaskTag.run(taskId, tag)
           }
@@ -2310,6 +2590,10 @@ function registerIpcHandlers() {
           step_count: steps.length,
           tags: cleanTags,
           propagate_tags: propagateTags,
+          apply_offsets: applyOffsets,
+          apply_priority: applyPriority,
+          apply_owner: applyOwner,
+          apply_team: applyTeam,
         }))
       })
       tx()

@@ -35,7 +35,7 @@ export function GeneralPanel() {
     else      localStorage.removeItem(ACTIVE_USER_KEY)
   }
 
-  const dbInfo = window.frame.version
+  const version = window.frame.version
 
   return (
     <div className="settings-section">
@@ -44,51 +44,61 @@ export function GeneralPanel() {
       </p>
 
       <section className="settings-card">
-        <h3 className="settings-card-heading">Appearance</h3>
-        <div className="settings-pref-row">
-          <div className="settings-pref-label">
-            <span>Theme</span>
-            <span className="muted compact">Light theme is partially styled — full polish lands in Iteration 10.</span>
-          </div>
-          <div className="settings-pref-options">
-            <label className="settings-pref-option">
-              <input type="radio" name="theme" checked={theme === 'dark'}  onChange={() => onPickTheme('dark')} />
-              Dark
-            </label>
-            <label className="settings-pref-option">
-              <input type="radio" name="theme" checked={theme === 'light'} onChange={() => onPickTheme('light')} />
-              Light
-            </label>
-          </div>
-        </div>
-      </section>
-
-      <section className="settings-card">
-        <h3 className="settings-card-heading">Active user</h3>
-        <div className="settings-pref-row">
-          <div className="settings-pref-label">
-            <span>Who am I?</span>
-            <span className="muted compact">Used by the upcoming My Work view to filter to your tasks. Pick from the assignees list.</span>
-          </div>
-          <div className="settings-pref-options">
-            <select value={activeUser} onChange={e => onPickUser(e.target.value)}>
-              <option value="">— Not set —</option>
-              {assignees.filter(a => a.isActive).map(a => (
-                <option key={a.id} value={a.name}>{a.name}</option>
-              ))}
-            </select>
+        <p className="settings-card-heading">Appearance</p>
+        <div className="settings-prefs">
+          <div className="settings-pref-row">
+            <div className="settings-pref-label">
+              <span>Theme</span>
+              <span className="settings-pref-hint">
+                Light theme is partially styled — full polish lands in Iteration 10.
+              </span>
+            </div>
+            <div className="settings-pref-options">
+              <label className="settings-pref-option">
+                <input type="radio" name="theme" checked={theme === 'dark'}  onChange={() => onPickTheme('dark')} />
+                Dark
+              </label>
+              <label className="settings-pref-option">
+                <input type="radio" name="theme" checked={theme === 'light'} onChange={() => onPickTheme('light')} />
+                Light
+              </label>
+            </div>
           </div>
         </div>
       </section>
 
       <section className="settings-card">
-        <h3 className="settings-card-heading">About</h3>
-        <div className="settings-pref-row">
-          <div className="settings-pref-label">
-            <span>FRAME version</span>
+        <p className="settings-card-heading">Active user</p>
+        <div className="settings-prefs">
+          <div className="settings-pref-row">
+            <div className="settings-pref-label">
+              <span>Who am I?</span>
+              <span className="settings-pref-hint">
+                Used by the upcoming My Work view to filter to your tasks. Pick from the assignees list.
+              </span>
+            </div>
+            <div className="settings-pref-options">
+              <select value={activeUser} onChange={e => onPickUser(e.target.value)}>
+                <option value="">— Not set —</option>
+                {assignees.filter(a => a.isActive).map(a => (
+                  <option key={a.id} value={a.name}>{a.name}</option>
+                ))}
+              </select>
+            </div>
           </div>
-          <div className="settings-pref-options">
-            <span className="muted compact">{dbInfo}</span>
+        </div>
+      </section>
+
+      <section className="settings-card">
+        <p className="settings-card-heading">About</p>
+        <div className="settings-prefs">
+          <div className="settings-pref-row">
+            <div className="settings-pref-label">
+              <span>FRAME version</span>
+            </div>
+            <div className="settings-pref-options">
+              <span className="muted compact">{version}</span>
+            </div>
           </div>
         </div>
       </section>
