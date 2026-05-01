@@ -3,6 +3,7 @@ import type { ViewDef, ViewId } from './types'
 import { CalendarView } from './views/CalendarView'
 import { DashboardView } from './views/DashboardView'
 import { MyWorkView } from './views/MyWorkView'
+import { PlanningView } from './views/PlanningView'
 import { RecurringView } from './views/RecurringView'
 import { SettingsView } from './views/SettingsView'
 import { TaskListView } from './views/TaskListView'
@@ -16,6 +17,7 @@ const VIEWS: ViewDef[] = [
   { id: 'tasks',     label: 'Task List' },
   { id: 'workflows', label: 'Workflows' },
   { id: 'recurring', label: 'Recurring' },
+  { id: 'planning',  label: 'Planning' },
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'calendar',  label: 'Calendar' },
   { id: 'settings',  label: 'Settings' },
@@ -123,6 +125,13 @@ function App() {
         ) : view.id === 'my-work' ? (
           <MyWorkView
             onJumpToSettings={() => setActiveView('settings')}
+            onOpenWorkflow={(id) => {
+              setSelectedWorkflowId(id)
+              setActiveView('workflows')
+            }}
+          />
+        ) : view.id === 'planning' ? (
+          <PlanningView
             onOpenWorkflow={(id) => {
               setSelectedWorkflowId(id)
               setActiveView('workflows')

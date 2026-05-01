@@ -49,7 +49,7 @@ function setupPaths(chosenDbPath) {
 
 // ─── Task helpers ─────────────────────────────────────────────────────────────
 
-function taskRowToObject(r, assignees, tags) {
+function taskRowToObject(r, assignees, tags, periodIds = []) {
   return {
     id:                   r.id,
     type:                 r.type,
@@ -65,6 +65,7 @@ function taskRowToObject(r, assignees, tags) {
     sortOrder:            r.sort_order ?? null,
     blockedByTaskId:      r.blocked_by_task_id ?? null,
     blockedReason:        r.blocked_reason ?? null,
+    periodIds:            periodIds ?? [],
     title:                r.title,
     description:          r.description,
     status:               r.status,
@@ -248,6 +249,37 @@ function runSchema() {
       name       TEXT NOT NULL UNIQUE,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS planning_periods (
+      id          INTEGER PRIMARY KEY,
+      name        TEXT NOT NULL,
+      kind        TEXT NOT NULL DEFAULT 'sprint',
+      start_date  TEXT NOT NULL,
+      end_date    TEXT NOT NULL,
+      is_archived INTEGER DEFAULT 0,
+      notes       TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS task_period_commitments (
+      id        INTEGER PRIMARY KEY,
+      task_id   INTEGER NOT NULL REFERENCES tasks(id)             ON DELETE CASCADE,
+      period_id INTEGER NOT NULL REFERENCES planning_periods(id)  ON DELETE CASCADE
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_task_period_commit
+      ON task_period_commitments(task_id, period_id);
+    CREATE INDEX IF NOT EXISTS idx_task_period_commit_period
+      ON task_period_commitments(period_id);
+
+    CREATE TABLE IF NOT EXISTS workflow_period_commitments (
+      id          INTEGER PRIMARY KEY,
+      instance_id INTEGER NOT NULL REFERENCES workflow_instances(id) ON DELETE CASCADE,
+      period_id   INTEGER NOT NULL REFERENCES planning_periods(id)   ON DELETE CASCADE
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_workflow_period_commit
+      ON workflow_period_commitments(instance_id, period_id);
+    CREATE INDEX IF NOT EXISTS idx_workflow_period_commit_period
+      ON workflow_period_commitments(period_id);
 
     CREATE TABLE IF NOT EXISTS workflow_instance_assignees (
       id          INTEGER PRIMARY KEY,
@@ -883,10 +915,21 @@ function registerIpcHandlers() {
       tagsByTaskId[t.task_id].push(t.tag)
     }
 
+    // Period commitments (planning periods this task is committed to).
+    const periodRows = db.prepare(
+      `SELECT task_id, period_id FROM task_period_commitments WHERE task_id IN (${placeholders})`
+    ).all(...ids)
+    const periodsByTaskId = {}
+    for (const p of periodRows) {
+      if (!periodsByTaskId[p.task_id]) periodsByTaskId[p.task_id] = []
+      periodsByTaskId[p.task_id].push(p.period_id)
+    }
+
     return rows.map(r => taskRowToObject(
       r,
       assigneesByTaskId[r.id] ?? [],
       tagsByTaskId[r.id] ?? [],
+      periodsByTaskId[r.id] ?? [],
     ))
   })
 
@@ -1200,8 +1243,10 @@ function registerIpcHandlers() {
         const params = { id }
         // Only allow changing type within the generic Task/Feature pair.
         // Workflow steps and recurring rows shouldn't be promoted to a
-        // different shape via this generic update path.
-        if (Object.prototype.hasOwnProperty.call(patch, 'type')) {
+        // different shape via this generic update path. Undefined is
+        // treated as "no-op" so the renderer can omit the key on edits
+        // for rows whose type isn't user-changeable.
+        if (Object.prototype.hasOwnProperty.call(patch, 'type') && patch.type !== undefined) {
           const allowed = new Set(['one-off', 'feature'])
           if (!allowed.has(patch.type)) {
             throw new Error(`Cannot change type to "${patch.type}" via update-task`)
@@ -1209,6 +1254,9 @@ function registerIpcHandlers() {
           if (oldRow.type !== 'one-off' && oldRow.type !== 'feature') {
             throw new Error(`Cannot change the type of a ${oldRow.type} row`)
           }
+        } else if (Object.prototype.hasOwnProperty.call(patch, 'type')) {
+          // Strip the undefined value so the field map below skips it.
+          delete patch.type
         }
 
         const map = {
@@ -1268,6 +1316,190 @@ function registerIpcHandlers() {
       return { ok: true, task: getTaskById(id) }
     } catch (err) {
       console.error('[DB] update-task failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  // ─── Planning periods (sprints / quarters / custom) ──────────────────────
+
+  ipcMain.handle('db:list-planning-periods', () => {
+    if (!db) return []
+    const rows = db.prepare(`
+      SELECT p.*,
+        (SELECT COUNT(*) FROM task_period_commitments     tc WHERE tc.period_id     = p.id) AS task_total,
+        (SELECT COUNT(*) FROM workflow_period_commitments wc WHERE wc.period_id     = p.id) AS workflow_total,
+        (
+          SELECT COUNT(*) FROM task_period_commitments tc
+          JOIN tasks t ON t.id = tc.task_id
+          WHERE tc.period_id = p.id AND t.is_deleted = 0 AND t.status = 'DONE'
+        ) AS task_done,
+        (
+          SELECT COUNT(*) FROM workflow_period_commitments wc
+          JOIN workflow_instances w ON w.id = wc.instance_id
+          WHERE wc.period_id = p.id AND w.is_deleted = 0 AND w.status = 'DONE'
+        ) AS workflow_done
+      FROM planning_periods p
+      ORDER BY p.start_date, p.created_at
+    `).all()
+    return rows.map(r => {
+      const total = r.task_total + r.workflow_total
+      const done  = r.task_done  + r.workflow_done
+      return {
+        id:           r.id,
+        name:         r.name,
+        kind:         r.kind,
+        startDate:    r.start_date,
+        endDate:      r.end_date,
+        isArchived:   !!r.is_archived,
+        notes:        r.notes,
+        createdAt:    r.created_at,
+        totalCommitted: total,
+        doneCommitted:  done,
+        hitRate:        total > 0 ? Math.round((done / total) * 100) : 0,
+      }
+    })
+  })
+
+  ipcMain.handle('db:get-planning-period', (_event, id) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const p = db.prepare('SELECT * FROM planning_periods WHERE id = ?').get(id)
+      if (!p) throw new Error(`Planning period ${id} not found`)
+      const taskRows = db.prepare(`
+        SELECT t.*
+        FROM task_period_commitments tc
+        JOIN tasks t ON t.id = tc.task_id
+        WHERE tc.period_id = ? AND t.is_deleted = 0
+        ORDER BY t.due_date IS NULL, t.due_date, t.title
+      `).all(id)
+      const wfRows = db.prepare(`
+        SELECT w.*, t.name AS template_name
+        FROM workflow_period_commitments wc
+        JOIN workflow_instances w ON w.id = wc.instance_id
+        LEFT JOIN workflow_templates t ON t.id = w.template_id
+        WHERE wc.period_id = ? AND w.is_deleted = 0
+        ORDER BY w.target_date IS NULL, w.target_date, w.name
+      `).all(id)
+      return {
+        ok: true,
+        period: {
+          id:         p.id,
+          name:       p.name,
+          kind:       p.kind,
+          startDate:  p.start_date,
+          endDate:    p.end_date,
+          isArchived: !!p.is_archived,
+          notes:      p.notes,
+          createdAt:  p.created_at,
+        },
+        taskIds:     taskRows.map(t => t.id),
+        workflowIds: wfRows.map(w => w.id),
+      }
+    } catch (err) {
+      console.error('[DB] get-planning-period failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:create-planning-period', (_event, input) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const name = String(input?.name ?? '').trim()
+      if (!name) throw new Error('Name is required')
+      const kind = String(input?.kind ?? 'sprint').trim() || 'sprint'
+      if (!input?.startDate || !input?.endDate) throw new Error('Start and end dates are required')
+      if (input.startDate > input.endDate) throw new Error('End date must be on or after start date')
+      const r = db.prepare(`
+        INSERT INTO planning_periods (name, kind, start_date, end_date, notes)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(name, kind, input.startDate, input.endDate, input?.notes ?? null)
+      return { ok: true, id: Number(r.lastInsertRowid) }
+    } catch (err) {
+      console.error('[DB] create-planning-period failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:update-planning-period', (_event, id, patch) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const old = db.prepare('SELECT * FROM planning_periods WHERE id = ?').get(id)
+      if (!old) throw new Error(`Planning period ${id} not found`)
+      const map = {
+        name:       'name',
+        kind:       'kind',
+        startDate:  'start_date',
+        endDate:    'end_date',
+        notes:      'notes',
+        isArchived: 'is_archived',
+      }
+      const setParts = []
+      const params = { id }
+      for (const [tsKey, sqlKey] of Object.entries(map)) {
+        if (Object.prototype.hasOwnProperty.call(patch, tsKey)) {
+          setParts.push(`${sqlKey} = @${tsKey}`)
+          const v = patch[tsKey]
+          params[tsKey] = (tsKey === 'isArchived') ? (v ? 1 : 0) : v
+        }
+      }
+      if (setParts.length === 0) return { ok: true }
+      db.prepare(`UPDATE planning_periods SET ${setParts.join(', ')} WHERE id = @id`).run(params)
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] update-planning-period failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:delete-planning-period', (_event, id) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      // Hard delete — the join tables cascade. Audit_log entry preserves
+      // the deleted row's snapshot if anyone needs to investigate later.
+      const old = db.prepare('SELECT * FROM planning_periods WHERE id = ?').get(id)
+      if (!old) throw new Error(`Planning period ${id} not found`)
+      db.prepare(`
+        INSERT INTO audit_log (table_name, row_id, action, changed_by, old_values)
+        VALUES ('planning_periods', ?, 'DELETE', 'user', ?)
+      `).run(id, JSON.stringify(old))
+      db.prepare('DELETE FROM planning_periods WHERE id = ?').run(id)
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] delete-planning-period failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:set-task-period-commitments', (_event, taskId, periodIds) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const ids = Array.isArray(periodIds) ? [...new Set(periodIds.map(Number).filter(Boolean))] : []
+      const tx = db.transaction(() => {
+        db.prepare('DELETE FROM task_period_commitments WHERE task_id = ?').run(taskId)
+        const ins = db.prepare('INSERT INTO task_period_commitments (task_id, period_id) VALUES (?, ?)')
+        for (const pid of ids) ins.run(taskId, pid)
+      })
+      tx()
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] set-task-period-commitments failed:', err.message)
+      return { ok: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db:set-workflow-period-commitments', (_event, instanceId, periodIds) => {
+    if (!db) return { ok: false, error: 'Database not ready' }
+    try {
+      const ids = Array.isArray(periodIds) ? [...new Set(periodIds.map(Number).filter(Boolean))] : []
+      const tx = db.transaction(() => {
+        db.prepare('DELETE FROM workflow_period_commitments WHERE instance_id = ?').run(instanceId)
+        const ins = db.prepare('INSERT INTO workflow_period_commitments (instance_id, period_id) VALUES (?, ?)')
+        for (const pid of ids) ins.run(instanceId, pid)
+      })
+      tx()
+      return { ok: true }
+    } catch (err) {
+      console.error('[DB] set-workflow-period-commitments failed:', err.message)
       return { ok: false, error: err.message }
     }
   })
@@ -2038,6 +2270,12 @@ function registerIpcHandlers() {
     const asnByInstance  = {}
     for (const r of tagRows) (tagsByInstance[r.instance_id] ??= []).push(r.tag)
     for (const r of asnRows) (asnByInstance[r.instance_id]  ??= []).push(r.name)
+    const periodRows = db.prepare(
+      `SELECT instance_id, period_id FROM workflow_period_commitments WHERE instance_id IN (${ph})`
+    ).all(...ids)
+    const periodsByInstance = {}
+    for (const r of periodRows) (periodsByInstance[r.instance_id] ??= []).push(r.period_id)
+
     return rows.map(r => ({
       id:           r.id,
       templateId:   r.template_id,
@@ -2055,6 +2293,7 @@ function registerIpcHandlers() {
       assignees:    asnByInstance[r.id] ?? [],
       notes:        r.notes,
       tags:         tagsByInstance[r.id] ?? [],
+      periodIds:    periodsByInstance[r.id] ?? [],
       totalSteps:   r.total_steps,
       doneSteps:    r.done_steps,
       percentDone:  r.total_steps > 0 ? Math.round((r.done_steps / r.total_steps) * 100) : 0,
@@ -2142,6 +2381,9 @@ function registerIpcHandlers() {
       const instAsns = db.prepare(
         'SELECT name FROM workflow_instance_assignees WHERE instance_id = ?'
       ).all(id).map(r => r.name)
+      const instPeriods = db.prepare(
+        'SELECT period_id FROM workflow_period_commitments WHERE instance_id = ?'
+      ).all(id).map(r => r.period_id)
 
       return {
         ok: true,
@@ -2162,6 +2404,7 @@ function registerIpcHandlers() {
           assignees:    instAsns,
           notes:        inst.notes,
           tags:         instTags,
+          periodIds:    instPeriods,
           totalSteps:   steps.length,
           doneSteps:    steps.filter(s => s.task && s.task.status === 'DONE').length,
           percentDone:  steps.length > 0

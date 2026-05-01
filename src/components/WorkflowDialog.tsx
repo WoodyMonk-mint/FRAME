@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type {
-  Assignee, Priority, Status, WorkflowInstance, WorkflowTemplate,
+  Assignee, PlanningPeriod, Priority, Status, WorkflowInstance, WorkflowTemplate,
 } from '../types'
 import { ALL_PRIORITIES, ALL_STATUSES } from '../types'
 import { todayIso } from '../lib/date'
+import { CommitPicker } from './CommitPicker'
 import { TagInput } from './TagInput'
 
 const GATE_TYPES = ['Concept', 'VS', 'EFP', 'FP'] as const
@@ -98,6 +99,15 @@ export function WorkflowDialog(props: Props) {
   const [saving, setSaving]         = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
 
+  // Planning-period commitments — edit-mode only.
+  const [periods, setPeriods] = useState<PlanningPeriod[]>([])
+  const [committedPeriodIds, setCommittedPeriodIds] =
+    useState<number[]>(initialInstance?.periodIds ?? [])
+  useEffect(() => {
+    if (!isEdit) return
+    void window.frame.db.listPlanningPeriods().then(p => setPeriods(p.filter(x => !x.isArchived)))
+  }, [isEdit])
+
   useEffect(() => { nameRef.current?.focus() }, [])
 
   // Auto-add the primary owner to the team when it changes.
@@ -139,6 +149,14 @@ export function WorkflowDialog(props: Props) {
           assignees:    team,
           tags,
         })
+        // Persist period commitments after the row update succeeds.
+        if (initialInstance) {
+          const original = [...(initialInstance.periodIds ?? [])].sort().join(',')
+          const next     = [...committedPeriodIds].sort().join(',')
+          if (original !== next) {
+            await window.frame.db.setWorkflowPeriodCommitments(initialInstance.id, committedPeriodIds)
+          }
+        }
       } else {
         await (props as CreateProps).onSubmit({
           templateId:           templateId as number,
@@ -345,6 +363,16 @@ export function WorkflowDialog(props: Props) {
             <p className="muted compact" style={{ fontSize: '0.75rem' }}>
               Tag changes here apply only to the workflow itself. Step-task tags stay independent.
             </p>
+          )}
+
+          {isEdit && periods.length > 0 && (
+            <CommitPicker
+              periods={periods}
+              selected={committedPeriodIds}
+              onToggle={(id) => setCommittedPeriodIds(prev =>
+                prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+              )}
+            />
           )}
 
           {!isEdit && tpl && (

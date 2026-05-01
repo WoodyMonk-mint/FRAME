@@ -84,6 +84,23 @@ declare global {
     softDeleteWorkflowInstance: (id: number) =>
       Promise<{ ok: boolean; error?: string }>
 
+    // Planning periods — Iteration 8
+    listPlanningPeriods:  () => Promise<import('./types').PlanningPeriod[]>
+    getPlanningPeriod:    (id: number) => Promise<
+      | { ok: true; period: Omit<import('./types').PlanningPeriod, 'totalCommitted' | 'doneCommitted' | 'hitRate'>; taskIds: number[]; workflowIds: number[] }
+      | { ok: false; error: string }
+    >
+    createPlanningPeriod: (input: import('./types').NewPlanningPeriodInput) =>
+      Promise<{ ok: boolean; id?: number; error?: string }>
+    updatePlanningPeriod: (id: number, patch: import('./types').PlanningPeriodPatch) =>
+      Promise<{ ok: boolean; error?: string }>
+    deletePlanningPeriod: (id: number) =>
+      Promise<{ ok: boolean; error?: string }>
+    setTaskPeriodCommitments:     (taskId: number, periodIds: number[]) =>
+      Promise<{ ok: boolean; error?: string }>
+    setWorkflowPeriodCommitments: (instanceId: number, periodIds: number[]) =>
+      Promise<{ ok: boolean; error?: string }>
+
     // Recurring tasks — Iteration 4
     listRecurrenceTemplates:  () => Promise<import('./types').RecurrenceTemplateSummary[]>
     getRecurrenceTemplate:    (id: number) => Promise<

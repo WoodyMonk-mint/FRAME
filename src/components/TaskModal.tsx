@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import type {
-  Assignee, Category, Priority, Status, Task, TaskInput, TaskType, WorkflowInstance,
+  Assignee, Category, PlanningPeriod, Priority, Status, Task, TaskInput, TaskType, WorkflowInstance,
 } from '../types'
 import { ALL_PRIORITIES, ALL_STATUSES, CREATABLE_TASK_TYPES } from '../types'
 import { todayIso } from '../lib/date'
 import { computeAutoPercent, openSubtaskCount } from '../lib/percent'
+import { CommitPicker } from './CommitPicker'
 import { TagInput } from './TagInput'
 import { TaskHistoryPanel } from './TaskHistoryPanel'
 
@@ -71,6 +72,16 @@ export function TaskModal({
   const [taskType, setTaskType]             = useState<TaskType>(task?.type ?? 'one-off')
   const [blockedByTaskId, setBlockedByTaskId] = useState<number | null>(task?.blockedByTaskId ?? null)
   const [blockedReason, setBlockedReason]     = useState(task?.blockedReason ?? '')
+
+  // Planning-period commitments. Edit-mode only — new tasks can be
+  // committed after creation (we need an id to wire the join row).
+  const [periods, setPeriods]                 = useState<PlanningPeriod[]>([])
+  const [committedPeriodIds, setCommittedPeriodIds] =
+    useState<number[]>(task?.periodIds ?? [])
+  useEffect(() => {
+    if (mode !== 'edit') return
+    void window.frame.db.listPlanningPeriods().then(p => setPeriods(p.filter(x => !x.isArchived)))
+  }, [mode])
 
   // The Type dropdown only makes sense for plain Task / Feature rows.
   // Subtasks are always tasks; workflow steps and recurring rows have
@@ -159,9 +170,8 @@ export function TaskModal({
       // Blocker fields are only meaningful while status === 'BLOCKED'.
       // Clear them on save otherwise so the data matches the visible state.
       const isBlocked = status === 'BLOCKED'
-      await onSave({
+      const payload: TaskInput = {
         title:           title.trim(),
-        type:            showTypeDropdown ? taskType : undefined,
         categoryId,
         primaryOwner:    primaryOwner ?? null,
         assignees:       team,
@@ -175,7 +185,22 @@ export function TaskModal({
         notes:           notes.trim() || null,
         blockedByTaskId: isBlocked ? blockedByTaskId               : null,
         blockedReason:   isBlocked ? (blockedReason.trim() || null) : null,
-      }, { setCompletedToToday: becomingDone })
+      }
+      // Only include the type key when the dropdown is visible; the
+      // backend rejects type changes on workflow / recurring rows and
+      // doesn't want an explicit undefined either.
+      if (showTypeDropdown) payload.type = taskType
+      await onSave(payload, { setCompletedToToday: becomingDone })
+
+      // After the row exists, persist period commitments. Edit-mode only;
+      // create-mode tasks don't have an id at this point.
+      if (mode === 'edit' && task) {
+        const original = [...(task.periodIds ?? [])].sort().join(',')
+        const next     = [...committedPeriodIds].sort().join(',')
+        if (original !== next) {
+          await window.frame.db.setTaskPeriodCommitments(task.id, committedPeriodIds)
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -514,6 +539,16 @@ export function TaskModal({
             <span>Notes</span>
             <textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Optional — context, links, decisions" />
           </label>
+
+          {mode === 'edit' && task && periods.length > 0 && (
+            <CommitPicker
+              periods={periods}
+              selected={committedPeriodIds}
+              onToggle={(id) => setCommittedPeriodIds(prev =>
+                prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+              )}
+            />
+          )}
 
           {mode === 'edit' && task && (
             <TaskHistoryPanel taskId={task.id} />

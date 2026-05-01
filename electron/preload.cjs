@@ -42,6 +42,17 @@ try {
       updateTask:      (id, patch)     => ipcRenderer.invoke('db:update-task', id, patch),
       softDeleteTask:  (id)            => ipcRenderer.invoke('db:soft-delete-task', id),
 
+      // Planning periods — Iteration 8
+      listPlanningPeriods:  ()           => ipcRenderer.invoke('db:list-planning-periods'),
+      getPlanningPeriod:    (id)         => ipcRenderer.invoke('db:get-planning-period', id),
+      createPlanningPeriod: (input)      => ipcRenderer.invoke('db:create-planning-period', input),
+      updatePlanningPeriod: (id, patch)  => ipcRenderer.invoke('db:update-planning-period', id, patch),
+      deletePlanningPeriod: (id)         => ipcRenderer.invoke('db:delete-planning-period', id),
+      setTaskPeriodCommitments:     (taskId, periodIds) =>
+        ipcRenderer.invoke('db:set-task-period-commitments', taskId, periodIds),
+      setWorkflowPeriodCommitments: (instanceId, periodIds) =>
+        ipcRenderer.invoke('db:set-workflow-period-commitments', instanceId, periodIds),
+
       // Recurring tasks — Iteration 4
       listRecurrenceTemplates:  ()                    => ipcRenderer.invoke('db:list-recurrence-templates'),
       getRecurrenceTemplate:    (id)                  => ipcRenderer.invoke('db:get-recurrence-template', id),

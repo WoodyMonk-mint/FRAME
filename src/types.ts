@@ -1,6 +1,6 @@
 // FRAME shared renderer types
 
-export type ViewId = 'tasks' | 'workflows' | 'recurring' | 'my-work' | 'dashboard' | 'calendar' | 'settings'
+export type ViewId = 'tasks' | 'workflows' | 'recurring' | 'my-work' | 'dashboard' | 'calendar' | 'planning' | 'settings'
 
 export type RecurrenceUnit = 'day' | 'week' | 'month' | 'year'
 export const RECURRENCE_UNITS: RecurrenceUnit[] = ['day', 'week', 'month', 'year']
@@ -57,6 +57,7 @@ export type Task = {
   sortOrder:            number | null
   blockedByTaskId:      number | null
   blockedReason:        string | null
+  periodIds:            number[]
   title:                string
   description:        string | null
   status:             Status
@@ -174,6 +175,7 @@ export type WorkflowInstance = {
   assignees:     string[]
   notes:         string | null
   tags:          string[]
+  periodIds:     number[]
   totalSteps:    number
   doneSteps:     number
   percentDone:   number
@@ -240,6 +242,36 @@ export type WorkflowNote = {
   note:       string
   author:     string | null
   createdAt:  string
+}
+
+// ─── Planning periods ──────────────────────────────────────────────────────
+
+export type PlanningPeriodKind = 'sprint' | 'quarter' | 'custom'
+
+export type PlanningPeriod = {
+  id:             number
+  name:           string
+  kind:           PlanningPeriodKind
+  startDate:      string
+  endDate:        string
+  isArchived:     boolean
+  notes:          string | null
+  createdAt:      string
+  totalCommitted: number
+  doneCommitted:  number
+  hitRate:        number
+}
+
+export type NewPlanningPeriodInput = {
+  name:       string
+  kind:       PlanningPeriodKind
+  startDate:  string
+  endDate:    string
+  notes?:     string | null
+}
+
+export type PlanningPeriodPatch = Partial<NewPlanningPeriodInput> & {
+  isArchived?: boolean
 }
 
 // ─── Recurring tasks ────────────────────────────────────────────────────────
