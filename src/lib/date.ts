@@ -1,4 +1,4 @@
-import type { Status } from '../types'
+import type { RecurrenceUnit, Status } from '../types'
 
 export type DueRange = 'all' | 'overdue' | 'today' | 'this-week' | 'no-date'
 
@@ -49,6 +49,23 @@ export function formatRelativeTime(input: string | null): string {
   if (day === 1)   return 'yesterday'
   if (day < 7)     return `${day}d ago`
   return new Date(t).toISOString().slice(0, 10)
+}
+
+// Step a YYYY-MM-DD date forward by a recurrence rule. Returns null if the
+// inputs are missing or invalid. Mirrors the backend's addRecurrence helper.
+export function addRecurrence(iso: string | null, unit: RecurrenceUnit | null, interval: number | null): string | null {
+  if (!iso || !unit) return null
+  const n = Math.max(1, interval ?? 1)
+  const d = new Date(iso + 'T00:00:00Z')
+  if (Number.isNaN(d.getTime())) return null
+  switch (unit) {
+    case 'day':   d.setUTCDate(d.getUTCDate()       + n);     break
+    case 'week':  d.setUTCDate(d.getUTCDate()       + n * 7); break
+    case 'month': d.setUTCMonth(d.getUTCMonth()     + n);     break
+    case 'year':  d.setUTCFullYear(d.getUTCFullYear() + n);   break
+    default: return null
+  }
+  return d.toISOString().slice(0, 10)
 }
 
 export function isInDueRange(dueDate: string | null, status: Status, range: DueRange): boolean {

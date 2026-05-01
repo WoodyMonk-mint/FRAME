@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ViewDef, ViewId } from './types'
+import { CalendarView } from './views/CalendarView'
 import { DashboardView } from './views/DashboardView'
 import { RecurringView } from './views/RecurringView'
 import { TaskListView } from './views/TaskListView'
@@ -14,7 +15,7 @@ const VIEWS: ViewDef[] = [
   { id: 'recurring', label: 'Recurring' },
   { id: 'my-work',   label: 'My Work',   iterationNote: 'Coming in Iteration 9 — personal task view filtered to the active user.' },
   { id: 'dashboard', label: 'Dashboard' },
-  { id: 'calendar',  label: 'Calendar',  iterationNote: 'Coming in Iteration 7 — month/week view with task blocks.' },
+  { id: 'calendar',  label: 'Calendar' },
   { id: 'settings',  label: 'Settings',  iterationNote: 'Coming in Iteration 9 — taxonomy management with unlock-to-edit.' },
 ]
 
@@ -108,6 +109,13 @@ function App() {
             onJumpToTasks={(preset) => {
               setPendingTaskFilter(preset)
               setActiveView('tasks')
+            }}
+          />
+        ) : view.id === 'calendar' ? (
+          <CalendarView
+            onOpenWorkflow={(id) => {
+              setSelectedWorkflowId(id)
+              setActiveView('workflows')
             }}
           />
         ) : (

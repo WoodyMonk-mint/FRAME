@@ -299,6 +299,7 @@ export function WorkflowDetailView({ instanceId, onBack }: Props) {
           childCount={0}
           autoChildren={[]}
           allTasks={allTasks}
+          allWorkflows={instance ? [instance] : []}
           categories={categories}
           assignees={assignees}
           tagSuggestions={tagSuggestions}

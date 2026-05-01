@@ -874,6 +874,7 @@ export function TaskListView({
           childCount={modal.kind === 'edit' ? (allChildrenByParent.get(modal.task.id)?.length ?? 0) : 0}
           autoChildren={modal.kind === 'edit' ? (allChildrenByParent.get(modal.task.id) ?? []) : []}
           allTasks={tasks}
+          allWorkflows={workflows}
           onOpenTask={(t) => setModal({ kind: 'edit', task: t })}
           categories={categories}
           assignees={assignees}

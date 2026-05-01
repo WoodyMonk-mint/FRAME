@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
-import type { Assignee, Category, Priority, Status, Task, TaskInput } from '../types'
+import type {
+  Assignee, Category, Priority, Status, Task, TaskInput, WorkflowInstance,
+} from '../types'
 import { ALL_PRIORITIES, ALL_STATUSES } from '../types'
 import { todayIso } from '../lib/date'
 import { computeAutoPercent, openSubtaskCount } from '../lib/percent'
@@ -13,6 +15,7 @@ type Props = {
   childCount?:    number        // when editing a parent
   autoChildren?:  Task[]        // for displaying live auto value
   allTasks?:      Task[]        // for the "Blocked by" picker (omit to hide)
+  allWorkflows?:  WorkflowInstance[]  // so step rows can show their parent workflow
   categories:     Category[]
   assignees:      Assignee[]
   tagSuggestions: string[]
@@ -33,7 +36,7 @@ const STATUS_LABEL: Record<Status, string> = {
 }
 
 export function TaskModal({
-  mode, task, parent, childCount = 0, autoChildren = [], allTasks = [],
+  mode, task, parent, childCount = 0, autoChildren = [], allTasks = [], allWorkflows = [],
   categories, assignees, tagSuggestions,
   onCancel, onSave, onDelete, onAddSubtask, onOpenTask,
 }: Props) {
@@ -159,9 +162,34 @@ export function TaskModal({
     }
   }
 
+  // Categorise the row being edited so the headline + context line can
+  // reflect what kind of task it actually is — workflow step, recurring
+  // occurrence, subtask, or plain task.
+  const taskKind: 'plain' | 'step' | 'recurring' | 'subtask' = (() => {
+    if (mode === 'add') return 'plain'
+    if (!task)          return 'plain'
+    if (task.workflowInstanceId   != null) return 'step'
+    if (task.recurrenceTemplateId != null) return 'recurring'
+    if (task.parentTaskId         != null) return 'subtask'
+    return 'plain'
+  })()
+
+  const parentWorkflow = task?.workflowInstanceId != null
+    ? allWorkflows.find(w => w.id === task.workflowInstanceId) ?? null
+    : null
+  const parentTaskRow = task?.parentTaskId != null
+    ? allTasks.find(t => t.id === task.parentTaskId) ?? null
+    : null
+  const parentTemplate = task?.recurrenceTemplateId != null
+    ? allTasks.find(t => t.id === task.recurrenceTemplateId) ?? null
+    : null
+
   const headlineLabel = (() => {
     if (mode === 'add' && parent) return 'New subtask'
     if (mode === 'add')           return 'New task'
+    if (taskKind === 'step')      return `Edit step${task?.workflowStepNumber != null ? ` ${task.workflowStepNumber}` : ''}`
+    if (taskKind === 'recurring') return 'Edit recurring occurrence'
+    if (taskKind === 'subtask')   return 'Edit subtask'
     return 'Edit task'
   })()
 
@@ -170,14 +198,38 @@ export function TaskModal({
     return title || 'Edit task'
   })()
 
+  // Sub-line under the headline showing parent context. Workflow steps get
+  // workflow name + gate + project; subtasks show their parent's title;
+  // recurring occurrences show the template they came from.
+  const headlineSubline: React.ReactNode = (() => {
+    if (mode === 'add' && parent) {
+      return <>Subtask of <strong>{parent.title}</strong></>
+    }
+    if (parentWorkflow) {
+      const bits = [
+        parentWorkflow.name,
+        parentWorkflow.gateType   ? `(${parentWorkflow.gateType})`  : null,
+        parentWorkflow.projectRef ? `· ${parentWorkflow.projectRef}` : null,
+      ].filter(Boolean).join(' ')
+      return <>Step of <strong>{bits}</strong></>
+    }
+    if (parentTemplate) {
+      return <>Occurrence of <strong>{parentTemplate.title}</strong></>
+    }
+    if (parentTaskRow) {
+      return <>Subtask of <strong>{parentTaskRow.title}</strong></>
+    }
+    return null
+  })()
+
   return (
     <div className="dialog-backdrop">
       <div className="dialog-card task-modal">
         <p className="panel-label">{headlineLabel}</p>
         <h3>{headlineTitle}</h3>
-        {parent && (
+        {headlineSubline && (
           <p className="muted compact subtask-context">
-            Subtask of <strong>{parent.title}</strong>
+            {headlineSubline}
           </p>
         )}
 
